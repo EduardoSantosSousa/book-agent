@@ -1,0 +1,176 @@
+# 1. Namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: book-agent-ns
+---
+# 2. Redis Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis-deployment
+  namespace: book-agent-ns
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+      - name: redis
+        image: redis/redis-stack:latest
+        ports:
+        - containerPort: 6379
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        volumeMounts:
+        - mountPath: /data
+          name: redis-data
+      volumes:
+      - name: redis-data
+        persistentVolumeClaim:
+          claimName: redis-pvc
+---
+# 3. Redis Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-service
+  namespace: book-agent-ns
+spec:
+  type: ClusterIP
+  selector:
+    app: redis
+  ports:
+  - port: 6379
+    targetPort: 6379
+---
+# 4. Ollama Deployment (CPU)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ollama-deployment
+  namespace: book-agent-ns
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ollama
+  template:
+    metadata:
+      labels:
+        app: ollama
+    spec:
+      containers:
+      - name: ollama
+        image: ollama/ollama:latest
+        ports:
+        - containerPort: 11434
+        env:
+        - name: OLLAMA_HOST
+          value: "0.0.0.0"
+        resources:
+          requests:
+            memory: "4Gi"
+            cpu: "2"
+        volumeMounts:
+        - mountPath: /root/.ollama
+          name: ollama-data
+      volumes:
+      - name: ollama-data
+        persistentVolumeClaim:
+          claimName: ollama-pvc
+---
+# 5. Ollama Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: ollama-service
+  namespace: book-agent-ns
+spec:
+  type: ClusterIP
+  selector:
+    app: ollama
+  ports:
+  - port: 11434
+    targetPort: 11434
+---
+# 6. Book Agent Deployment (ajustado com startupProbe)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: book-agent-deployment
+  namespace: book-agent-ns
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: book-agent
+  template:
+    metadata:
+      labels:
+        app: book-agent
+    spec:
+      containers:
+      - name: book-agent
+        image: us-central1-docker.pkg.dev/book-agent-api/book-agent-repo/book-agent:1.0.0
+        ports:
+        - containerPort: 8080
+        env:
+        - name: OLLAMA_BASE_URL
+          value: "http://ollama-service.book-agent-ns.svc.cluster.local:11434"
+        - name: REDIS_HOST
+          value: "redis-service.book-agent-ns.svc.cluster.local"
+        - name: REDIS_PORT
+          value: "6379"
+        - name: GOOGLE_APPLICATION_CREDENTIALS
+          value: "/app/credentials/credentials.json"
+        resources:
+          requests:
+            memory: "4Gi"
+            cpu: "2"
+          limits:
+            memory: "8Gi"
+            cpu: "4"
+        volumeMounts:
+        - mountPath: /app/credentials
+          name: credentials
+          readOnly: true
+
+        # ✅ StartupProbe adicionada
+        startupProbe:
+          httpGet:
+            path: /api/v1/health      # ajuste para seu endpoint de health real, se houver
+            port: 8080
+          failureThreshold: 30   # número de tentativas antes de matar o container
+          periodSeconds: 800      # intervalo entre tentativas
+
+      volumes:
+      - name: credentials
+        secret:
+          secretName: google-credentials
+
+---
+# 7. Book Agent Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: book-agent-service
+  namespace: book-agent-ns
+spec:
+  type: LoadBalancer
+  selector:
+    app: book-agent
+  ports:
+  - port: 80
+    targetPort: 8080
+

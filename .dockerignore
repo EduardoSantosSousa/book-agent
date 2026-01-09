@@ -1,0 +1,39 @@
+# Ignorar diretórios que não precisam ir para a imagem
+node_modules/
+__pycache__/
+dist/
+build/
+venv/
+
+# Ignorar arquivos de configuração locais
+.env
+*.env
+
+# Ignorar arquivos temporários
+*.log
+*.tmp
+
+# Ignorar arquivos do Git
+.git
+.gitignore
+
+#Ignorar demais aqruivos: 
+doc/
+data/
+book_index_gpu_embeddings.npy
+book_index_gpu_embeddings.faiss
+
+
+.venv
+.git
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.pt
+*.bin
+*.pdf
+*.parquet
+*.csv
+node_modules
+.env

@@ -1,0 +1,50 @@
+# Core da API
+Flask==3.0.0
+Flask[async]
+Flask-Cors==4.0.0
+gunicorn==21.2.0
+python-dotenv==1.0.0
+
+# Validação
+pydantic==2.5.0
+pydantic-settings==2.1.0
+
+# Processamento de dados
+pandas==2.1.3
+numpy==1.24.4
+
+# Embeddings e ML
+sentence-transformers==2.6.1
+faiss-cpu==1.7.4
+scikit-learn==1.3.0
+scipy==1.13.0
+transformers==4.41.2
+huggingface-hub>=0.20.0,<0.25.0
+
+
+# HTTP/Async
+aiohttp==3.9.1
+httpx>=0.27.0,<0.28.0
+requests==2.32.5
+
+# Tradução
+deep-translator==1.11.4
+
+# Ollama
+ollama==0.3.0
+
+# Utilitários
+tqdm==4.66.1
+tenacity==8.2.3
+redis==7.1.0
+
+groq==1.0.0
+
+# google: 
+google-api-core==2.28.1
+google-auth==2.43.0
+google-cloud-core==2.5.0
+google-cloud-storage==3.7.0
+google-crc32c==1.7.1
+google-resumable-media==2.8.0
+googleapis-common-protos==1.72.0
