@@ -11,7 +11,6 @@ pip-delete-this-directory.txt
 .DS_Store
 .ipynb_checkpoints/
 *.ipynb
-models/
 downloads/
 logs/
 *.log
