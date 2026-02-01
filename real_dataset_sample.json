@@ -1,0 +1,142 @@
+[
+  {
+    "bookid":1,
+    "title":"The Hunger Games",
+    "author":[
+      "Suzanne Collins"
+    ]
+  },
+  {
+    "bookid":2,
+    "title":"Harry Potter and the Order of the Phoenix",
+    "author":[
+      "J.K. Rowling, Mary GrandPr\u00e9 (Illustrator)"
+    ]
+  },
+  {
+    "bookid":3,
+    "title":"To Kill a Mockingbird",
+    "author":[
+      "Harper Lee"
+    ]
+  },
+  {
+    "bookid":4,
+    "title":"Pride and Prejudice",
+    "author":[
+      "Jane Austen, Anna Quindlen (Introduction)"
+    ]
+  },
+  {
+    "bookid":5,
+    "title":"Twilight",
+    "author":[
+      "Stephenie Meyer"
+    ]
+  },
+  {
+    "bookid":6,
+    "title":"The Book Thief",
+    "author":[
+      "Markus Zusak (Goodreads Author)"
+    ]
+  },
+  {
+    "bookid":7,
+    "title":"Animal Farm",
+    "author":[
+      "George Orwell, Russell Baker (Preface), C.M. Woodhouse (Introduction)"
+    ]
+  },
+  {
+    "bookid":8,
+    "title":"The Chronicles of Narnia",
+    "author":[
+      "C.S. Lewis, Pauline Baynes (Illustrator)"
+    ]
+  },
+  {
+    "bookid":9,
+    "title":"J.R.R. Tolkien 4-Book Boxed Set: The Hobbit and The Lord of the Rings",
+    "author":[
+      "J.R.R. Tolkien"
+    ]
+  },
+  {
+    "bookid":10,
+    "title":"Gone with the Wind",
+    "author":[
+      "Margaret Mitchell"
+    ]
+  },
+  {
+    "bookid":11,
+    "title":"The Fault in Our Stars",
+    "author":[
+      "John Green (Goodreads Author)"
+    ]
+  },
+  {
+    "bookid":12,
+    "title":"The Hitchhiker's Guide to the Galaxy",
+    "author":[
+      "Douglas Adams"
+    ]
+  },
+  {
+    "bookid":13,
+    "title":"The Giving Tree",
+    "author":[
+      "Shel Silverstein"
+    ]
+  },
+  {
+    "bookid":14,
+    "title":"Wuthering Heights",
+    "author":[
+      "Emily Bront\u00eb, Richard J. Dunn (Editor), David Timson (Narrator), Charlotte Bront\u00eb (Commentary), Robert Heindel (Illustrator)"
+    ]
+  },
+  {
+    "bookid":15,
+    "title":"The Da Vinci Code",
+    "author":[
+      "Dan Brown (Goodreads Author)"
+    ]
+  },
+  {
+    "bookid":16,
+    "title":"Memoirs of a Geisha",
+    "author":[
+      "Arthur Golden"
+    ]
+  },
+  {
+    "bookid":17,
+    "title":"The Picture of Dorian Gray",
+    "author":[
+      "Oscar Wilde, Jeffrey Eugenides (Introduction)"
+    ]
+  },
+  {
+    "bookid":18,
+    "title":"Alice's Adventures in Wonderland & Through the Looking-Glass",
+    "author":[
+      "Lewis Carroll, John Tenniel (Illustrator), Martin Gardner (Introduction)"
+    ]
+  },
+  {
+    "bookid":19,
+    "title":"Jane Eyre",
+    "author":[
+      "Charlotte Bront\u00eb, Michael Mason (Editor), Barnett Freedman (Illustrator)"
+    ]
+  },
+  {
+    "bookid":20,
+    "title":"Les Mis\u00e9rables",
+    "author":[
+      "Victor Hugo, Lee Fahnestock (Translator), Norman MacAfee (Translator)"
+    ]
+  }
+]

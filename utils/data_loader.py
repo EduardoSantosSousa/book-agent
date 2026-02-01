@@ -94,6 +94,24 @@ class DataLoader:
             
             # Converter para DataFrame
             self.data = pd.read_csv(io.BytesIO(content))
+
+            # Adicione APÓS a linha: self.data = pd.read_csv(io.BytesIO(content))
+            logger.info(f"=== DIAGNÓSTICO DO CSV CARREGADO ===")
+            logger.info(f"📁 Arquivo CSV: {latest_blob.name}")
+            logger.info(f"📊 Total de linhas: {len(self.data)}")
+            logger.info(f"🔍 Verificando 'Six of Crows'...")
+            # Buscar o livro específico
+            mask = self.data['title'].str.contains('Six of Crows', case=False, na=False)
+            if mask.any():
+                row = self.data[mask].iloc[0]
+                logger.info(f"✅ ENCONTRADO: ID {row.get('bookId')} - {row['title']}")
+            else:
+                logger.info(f"❌ NÃO ENCONTRADO: 'Six of Crows' não está neste CSV")
+                
+            # Mostrar primeiras linhas para debug
+            logger.info(f"📋 Primeiros 5 títulos:")
+            for idx, row in self.data.head().iterrows():
+                logger.info(f"   {idx}: ID {row.get('bookId', 'N/A')} - {row.get('title', 'N/A')}")
             
             logger.info(f"🎉 Dataset carregado do GCS: {len(self.data)} livros")
             logger.info(f"📊 Colunas brutas: {list(self.data.columns)}")
@@ -158,7 +176,7 @@ class DataLoader:
             logger.warning(f"⚠️ Não foi possível salvar cache: {e}")
     
     def _process_data(self) -> bool:
-        """Processa e prepara o dataset após carregamento"""
+        """Processa e prepara o dataset após carregamento - VERSÃO CORRIGIDA"""
         try:
             if self.data is None or self.data.empty:
                 logger.warning("⚠️ Dataset vazio - sem processamento necessário")
@@ -183,27 +201,21 @@ class DataLoader:
                     self.data[col] = self.data[col].apply(self._safe_convert_to_list)
                     logger.info(f"   ✅ Coluna '{col}' convertida para lista")
             
-            # 4. Garantir colunas essenciais com valores padrão
-            essential_columns = {
-                'title': '',
-                'author': [],
-                'description': '',
-                'rating': 0.0,
-                'bookid': range(len(self.data)),
-                'book_id': range(len(self.data))
-            }
+            # 4. GARANTIR QUE OS book_id NÃO SÃO RECRIADOS!
+            # Primeiro, verificar se temos a coluna bookid no CSV
+            if 'bookid' not in self.data.columns:
+                # Se não tiver, criar mantendo o índice original + 1
+                self.data['bookid'] = range(1, len(self.data) + 1)
+                logger.info("   ✅ Coluna 'bookid' criada (1-based index)")
+            else:
+                # Se já existe, garantir que é numérico
+                self.data['bookid'] = pd.to_numeric(self.data['bookid'], errors='coerce').fillna(0).astype(int)
+                logger.info("   ✅ Coluna 'bookid' convertida para inteiro")
             
-            for col, default_value in essential_columns.items():
-                if col not in self.data.columns:
-                    if callable(default_value):
-                        self.data[col] = default_value()
-                    else:
-                        self.data[col] = default_value
-                    logger.info(f"   ✅ Coluna '{col}' criada com valor padrão")
-            
-            # 5. Garantir que 'book_id' existe (usar 'bookid' ou criar)
-            if 'book_id' not in self.data.columns and 'bookid' in self.data.columns:
+            # 5. Criar book_id a partir do bookid (para compatibilidade)
+            if 'book_id' not in self.data.columns:
                 self.data['book_id'] = self.data['bookid']
+                logger.info("   ✅ Coluna 'book_id' criada a partir de bookid")
             
             # 6. Criar coluna combinada de autores se necessário
             if 'authors' not in self.data.columns and 'author' in self.data.columns:
@@ -213,7 +225,11 @@ class DataLoader:
             if 'rating' in self.data.columns:
                 self.data['rating'] = pd.to_numeric(self.data['rating'], errors='coerce').fillna(0.0)
             
-            # 8. Calcular estatísticas
+            # 8. VERIFICAR SE OS IDs BATEM
+            logger.info(f"   📊 Primeiros 5 book_id: {list(self.data['book_id'].head())}")
+            logger.info(f"   📊 Últimos 5 book_id: {list(self.data['book_id'].tail())}")
+            
+            # 9. Calcular estatísticas
             self._calculate_stats()
             
             logger.info(f"✅ Processamento concluído: {len(self.data)} livros")

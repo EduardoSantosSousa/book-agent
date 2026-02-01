@@ -1302,3 +1302,42 @@ def list_all_sessions():
             'success': False,
             'error': 'Erro ao listar sessões'
         }), 500
+    
+
+@api_bp.route('/refine-query', methods=['POST'])
+@async_handler
+async def refine_query():
+    """Endpoint para testar refinamento de query"""
+    try:
+        data = request.get_json()
+        query = data.get('query', '')
+        language = data.get('language', 'pt')
+        
+        if not query:
+            return jsonify({"error": "Query é obrigatória"}), 400
+        
+        agent_service = get_agent_service()
+        
+        # Verificar se o query_refiner está disponível
+        if not hasattr(agent_service, 'query_refiner') or not agent_service.query_refiner:
+            return jsonify({
+                "success": False,
+                "error": "Query refiner não disponível"
+            }), 500
+        
+        refinement = await agent_service.query_refiner.refine_search_query(
+            query, language
+        )
+        
+        return jsonify({
+            "success": True,
+            "original_query": query,
+            "refinement": refinement
+        })
+        
+    except Exception as e:
+        logger.error(f"Erro ao refinar query: {e}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500

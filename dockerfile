@@ -12,7 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # Copiar requirements
-COPY requirements-docker-gpu.txt .
+COPY requirements-prod.txt .
 
 # 1️⃣ ATUALIZAR pip
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel

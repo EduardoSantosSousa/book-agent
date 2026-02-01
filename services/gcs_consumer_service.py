@@ -1,3 +1,5 @@
+# D:\Django\book_agent\services\gcs_consumer_service.py
+
 import io
 import numpy as np
 import faiss

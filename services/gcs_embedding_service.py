@@ -1,3 +1,5 @@
+# D:\Django\book_agent\services\gcs_embedding_service.py
+
 import io
 import numpy as np
 import faiss

@@ -19,6 +19,7 @@ from services.translation_service import get_translation_service
 import os
 from services.conversation_context import ConversationContextManager
 from dotenv import load_dotenv
+from services.query_refiner import QueryRefinerAgent
 
 load_dotenv()
 
@@ -47,7 +48,8 @@ class BookAgentService:
         self.initialized = False
         self.conversation_history = []
         self.book_conversation_service = None
-        self.translation_service = None  
+        self.translation_service = None
+        self.query_refiner = None  
 
         # Sistema de cache:
         self.search_cache = {}
@@ -178,12 +180,19 @@ class BookAgentService:
             logger.info("🌐 Inicializando tradução...")
             self.translation_service = get_translation_service()
             
+
+            # 9. Inicializar refinador de queries
+            logger.info("🧠 Inicializando refinador de queries...")
+            self.query_refiner = QueryRefinerAgent(self.ollama_service)
+                
+            logger.info("🎉 Book Agent Service inicializado!")
+
             self.initialized = True
-            
+
             logger.info("🎉 Book Agent Service inicializado!")
             logger.info("   Fonte dados: GCS (versão mais recente)")
             logger.info(f"   Total livros: {len(self.data_loader.data)}")
-            
+
             return True
             
         except Exception as e:
@@ -296,6 +305,87 @@ class BookAgentService:
                     break
         
         return detected_topics[0] if detected_topics else 'general'
+    
+    # Em agent_service.py, adicione este método:
+
+    async def _intelligent_search(self, message: str, user_profile: Dict, 
+                                conversation_history: List[Dict], language: str) -> List:
+        """
+        Busca inteligente com refinamento de query
+        """
+        # 1. Refinar a query
+        refinement = await self.query_refiner.refine_search_query(message, language)
+        
+        normalized_query = refinement.get("normalized_query", message)
+        synonyms = refinement.get("synonyms", [])
+        keywords = refinement.get("keywords", [])
+        search_intent = refinement.get("search_intent", "general")
+        
+        logger.info(f"🧠 Busca inteligente - Intenção: {search_intent}")
+        logger.info(f"   Query normalizada: '{normalized_query}'")
+        logger.info(f"   Sinônimos: {synonyms[:3]}...")
+        
+        # 2. Construir query expandida
+        expanded_query = normalized_query
+        
+        # Adicionar sinônimos se for sobre quadrinhos
+        if search_intent == "comics":
+            expanded_query = f"{normalized_query} {' '.join(synonyms[:5])}"
+            logger.info(f"   Query expandida (comics): {expanded_query}")
+        
+        # 3. Expandir com contexto se houver histórico
+        if conversation_history:
+            context_expansion = await self.query_refiner.expand_with_context(
+                expanded_query, conversation_history, language
+            )
+            expanded_query = context_expansion.get("expanded_query", expanded_query)
+            logger.info(f"   Query com contexto: {expanded_query}")
+        
+        # 4. Executar busca híbrida
+        try:
+            # Primeiro: busca semântica com query expandida
+            semantic_results = self.search_engine.search_by_semantic(
+                expanded_query, k=12
+            )
+            
+            # Segundo: busca textual com termos-chave
+            textual_results = []
+            for keyword in keywords[:3]:
+                textual = self.search_engine.search_by_textual(keyword, k=8)
+                textual_results.extend(textual)
+            
+            # Combinar resultados
+            all_results = semantic_results + textual_results
+            
+            # Remover duplicatas
+            unique_results = self._remove_duplicate_books(all_results)
+            
+            # Ordenar por relevância
+            if search_intent == "comics":
+                # Para comics, priorizar títulos que contêm palavras-chave
+                unique_results.sort(
+                    key=lambda x: (
+                        1 if any(keyword.lower() in x.title.lower() 
+                                for keyword in keywords) else 0,
+                        x.similarity_score
+                    ),
+                    reverse=True
+                )
+            else:
+                # Ordenar normal
+                unique_results.sort(key=lambda x: x.similarity_score, reverse=True)
+            
+            logger.info(f"📚 Resultados combinados: {len(unique_results)} livros")
+            return unique_results[:10]
+            
+        except Exception as e:
+            logger.error(f"❌ Erro na busca inteligente: {e}")
+            # Fallback para busca semântica simples
+            return self.search_engine.search_by_semantic(normalized_query, k=8)
+
+
+
+
 
     def _determine_search_strategy(self, message: str, intent: str, 
                                 context_analysis: Dict, last_recommendations: List[Dict]) -> str:
@@ -578,7 +668,9 @@ class BookAgentService:
                 if search_strategy == "new_search":
                     # Busca completamente nova
                     logger.info("🔄 Busca completamente nova")
-                    books = self.search_engine.search_by_semantic(search_query, k=8)
+                    books = await self._intelligent_search(
+                        search_query, user_profile, conversation_history, language
+                    )
                     
                 elif search_strategy == "context_boosted":
                     # Busca nova com boost do contexto anterior
@@ -589,10 +681,14 @@ class BookAgentService:
                         context_keywords = self._extract_keywords_from_books(last_recommendations[:2])
                         boosted_query = f"{search_query} {context_keywords}"
                         logger.info(f"🔍 Query com boost: {boosted_query}")
-                        books = self.search_engine.search_by_semantic(boosted_query, k=8)
+                        books = await self._intelligent_search(
+                            boosted_query, user_profile, conversation_history, language
+                        )
                     else:
-                        books = self.search_engine.search_by_semantic(search_query, k=8)
-                    
+                        books = await self._intelligent_search(
+                            search_query, user_profile, conversation_history, language
+                        )
+                        
                 elif search_strategy == "similar_to_previous":
                     # Buscar livros similares aos anteriores (para continuidade)
                     logger.info("📚 Buscando livros similares aos anteriores")
@@ -623,7 +719,7 @@ class BookAgentService:
                 else:
                     # Fallback: busca normal
                     logger.info("⚡ Fallback: busca normal")
-                    books = self.search_engine.search_by_semantic(search_query, k=8)
+                    books = self.search_engine.search(search_query, search_type="hybrid", k=8)
                     
             except Exception as e:
                 logger.error(f"❌ Erro no sistema híbrido de busca: {e}")

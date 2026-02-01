@@ -35,7 +35,16 @@ def create_app():
     )
     
     # Configurar CORS
-    CORS(app, resources={r"/api/*": {"origins": "*"}})
+    CORS(app, resources={
+    r"/*": {  # Para TODAS as rotas
+        "origins": ["http://localhost:8000", "http://127.0.0.1:8000", "http://localhost:3000", "http://localhost:8080"],
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+        "allow_headers": ["*"],
+        "expose_headers": ["*"],
+        "supports_credentials": True,
+        "max_age": 3600
+    }
+    })
     
     # Setup middleware
     setup_middleware(app)
@@ -126,6 +135,7 @@ def create_app():
     
     return app
 
+    
 # ==============================================
 # EXECUÇÃO
 # ==============================================
