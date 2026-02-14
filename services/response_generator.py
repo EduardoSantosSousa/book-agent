@@ -155,12 +155,13 @@ class ResponseGenerator:
             
             REGRAS IMPORTANTES:
             1. Recomende APENAS livros da lista acima
-            2. Use o histórico da conversa para manter continuidade
-            3. Seja específico sobre POR QUE cada livro é relevante
-            4. Relacione com a conversa anterior quando aplicável
-            5. Se o usuário perguntar sobre livros já mencionados, foque neles
-            6. Não invente livros que não estão na lista
-            7. Não sugira livros que não foram fornecidos
+            2. RECOMENDE MÚLTIPLOS livros (2-3) que sejam mais relevantes para o interesse do usuário
+            3. Use o histórico da conversa para manter continuidade
+            4. Seja específico sobre POR QUE cada livro é relevante
+            5. Relacione com a conversa anterior quando aplicável
+            6. Se o usuário perguntar sobre livros já mencionados, foque neles
+            7. Não invente livros que não estão na lista
+            8. Não sugira livros que não foram fornecidos
             
             SUA RESPOSTA DEVE:
             - Ser natural e conversacional
@@ -195,12 +196,13 @@ class ResponseGenerator:
             
             IMPORTANT RULES:
             1. Recommend ONLY books from the list above
-            2. Use conversation history to maintain continuity
-            3. Be specific about WHY each book is relevant
-            4. Relate to previous conversation when applicable
-            5. If user asks about previously mentioned books, focus on them
-            6. Do not invent books that are not in the list
-            7. Do not suggest books that were not provided
+            2.RECOMMEND MULTIPLE books (2-3) that are most relevant to the user's interest
+            3. Use conversation history to maintain continuity
+            4. Be specific about WHY each book is relevant
+            5. Relate to previous conversation when applicable
+            6. If user asks about previously mentioned books, focus on them
+            7. Do not invent books that are not in the list
+            8. Do not suggest books that were not provided
             
             YOUR RESPONSE SHOULD:
             - Be natural and conversational

@@ -429,6 +429,30 @@ class BookAgentService:
         
         message_lower = message.lower()
         
+        # 🔥 NOVO: Detectar se está pedindo mais detalhes sobre um livro específico
+        detail_phrases = [
+            'more details about', 'tell me about', 'what can you tell me about',
+            'more information about', 'about the book', 'detalhes sobre',
+            'fale mais sobre', 'o que pode me dizer', 'sobre o livro',
+            'give me more details', 'could you give me more details'
+        ]
+        
+        asking_for_details = any(phrase in message_lower for phrase in detail_phrases)
+        
+        # Se está pedindo detalhes E tem livros anteriores
+        if asking_for_details and last_recommendations:
+            # Verificar se menciona algum título específico
+            for book in last_recommendations[:10]:  # Verificar últimos 5 livros
+                title = book.get('title', '').lower()
+                if title and title in message_lower:
+                    logger.info(f"📚 Pergunta sobre livro específico detectada: '{title[:50]}...'")
+                    return "use_previous_only"
+            
+            # Se não encontrou título exato, verificar palavras-chave
+            if any(keyword in message_lower for keyword in ['book', 'livro', 'this', 'that', 'esse', 'esse']):
+                logger.info(f"📚 Referência a livro anterior detectada (termo genérico)")
+                return "use_previous_only"
+        
         # 1. Se está explicitamente perguntando sobre livros anteriores
         if context_analysis['asking_about_previous']:
             return "use_previous_only"
@@ -444,7 +468,7 @@ class BookAgentService:
         # 4. Se há recomendações anteriores E é continuação do mesmo tópico
         if last_recommendations and context_analysis['is_continuation']:
             # Verificar se a pergunta é sobre aspectos específicos dos livros anteriores
-            specific_aspects = ['melhor', 'mais', 'recomenda', 'indica', 'sugere']
+            specific_aspects = ['melhor', 'mais', 'recomenda', 'indica', 'sugere', 'similar', 'parecido']
             if any(aspect in message_lower for aspect in specific_aspects):
                 return "context_boosted"
             else:
@@ -754,7 +778,7 @@ class BookAgentService:
                 )
                 
                 # Salvar resposta do assistente COM LIVROS (dicionários)
-                response_books = self._convert_book_results_to_dicts(books[:3])
+                response_books = self._convert_book_results_to_dicts(books[:10])
                 self.book_conversation_service.context_manager.add_message(
                     session_id, 'assistant', response_text, 
                     books=response_books, 
@@ -803,12 +827,39 @@ class BookAgentService:
         
         message_lower = message.lower()
         
+        # 🔥 NOVOS padrões para detectar pedidos de mais detalhes
+        detail_patterns = [
+            r'more details about',
+            r'tell me about',
+            r'what can you tell me about',
+            r'more information about',
+            r'about the book',
+            r'detalhes sobre',
+            r'fale mais sobre',
+            r'o que pode me dizer',
+            r'sobre o livro',
+            r'give me more details',
+            r'could you give me more details'
+        ]
+        
+        import re
+        for pattern in detail_patterns:
+            if re.search(pattern, message_lower):
+                # Verificar se menciona algum título específico
+                for book in last_recommendations[:5]:
+                    title = book.get('title', '').lower()
+                    if title and (title in message_lower or 
+                                any(word in message_lower for word in title.split()[:3])):
+                        return True
+        
         # Palavras-chave que indicam referência a anterior
         reference_keywords = {
             'pt': ['aquele', 'esse', 'desse', 'desses', 'que você', 'você me', 'mencionou', 'falou', 'citou', 
-                'anterior', 'antes', 'primeiro', 'segundo', 'terceiro', 'último', 'recomendou'],
+                'anterior', 'antes', 'primeiro', 'segundo', 'terceiro', 'último', 'recomendou',
+                'detalhes', 'mais sobre'],
             'en': ['that', 'this', 'the one', 'you said', 'mentioned', 'talked', 'cited', 
-                'previous', 'before', 'first', 'second', 'third', 'last', 'recommended']
+                'previous', 'before', 'first', 'second', 'third', 'last', 'recommended',
+                'details', 'more about']
         }
         
         keywords = reference_keywords.get(language, reference_keywords['pt'])
@@ -824,7 +875,8 @@ class BookAgentService:
                 return True
         
         return False
-
+    
+    
     def _build_search_query(self, message: str, user_profile: Dict) -> str:
         """Constrói query de busca considerando perfil do usuário"""
         query_parts = []
