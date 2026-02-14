@@ -1,16 +1,12 @@
 import torch
 import numpy as np
 import faiss
-import pickle
 import os
-import time
 import logging
-import tempfile
 from typing import List, Tuple, Optional
 from sentence_transformers import SentenceTransformer
-from tqdm.auto import tqdm
 import pandas as pd
-from config import config, EmbeddingLoader
+from config import config
 
 logger = logging.getLogger(__name__)
 
@@ -23,13 +19,13 @@ class EmbeddingService:
         self.use_gpu = use_gpu
         self.device = None
         self.embedding_model = None
-        self.gcs_consumer = None  # Consumidor GCS
+        self.gcs_consumer = None
         self.index = None
         self.book_embeddings = None
         self.index_built = False
         
     def initialize(self) -> bool:
-        """Inicializa apenas como consumidor do GCS"""
+        """Inicializa como consumidor do GCS com embeddings, índice e metadados"""
         try:
             logger.info(f"Inicializando modelo de embeddings: {self.model_name}")
             
@@ -48,30 +44,31 @@ class EmbeddingService:
             # 2. Inicializar consumidor GCS
             logger.info("🔗 Conectando ao bucket GCS...")
             
-            # Importar aqui para evitar dependência circular
-            from services.gcs_consumer_service import GCSEmbeddingConsumer
+            # Import CORRETO - usando a classe GCSEmbeddingService
+            from services.gcs_embedding_service import GCSEmbeddingService
             
-            self.gcs_consumer = GCSEmbeddingConsumer(
-                bucket_name=config.GCS_BUCKET_NAME,
-                embeddings_prefix=config.GCS_EMBEDDINGS_PREFIX
+            self.gcs_consumer = GCSEmbeddingService(
+                bucket_name=config.GCS_BUCKET_NAME
             )
             
-            # 3. Carregar embeddings mais recentes
-            if not self.gcs_consumer.load_latest_embeddings():
+            # 3. Carregar embeddings, índice E METADADOS mais recentes
+            if not self.gcs_consumer.load_latest_embeddings_with_metadata():
                 logger.error("❌ Falha ao carregar embeddings do GCS")
                 return False
             
             # 4. Para compatibilidade com código existente
-            self.index = self.gcs_consumer.current_index
-            self.book_embeddings = self.gcs_consumer.current_embeddings
+            self.index = self.gcs_consumer.index
+            self.book_embeddings = self.gcs_consumer.embeddings
             self.index_built = True
             
-            # 5. Log de sucesso
+            # 5. Log de sucesso com estatísticas completas
             stats = self.gcs_consumer.get_stats()
             logger.info(f"🎉 Sistema inicializado como consumidor GCS")
-            logger.info(f"   Versão: {stats.get('version', 'N/A')}")
-            logger.info(f"   Embeddings: {stats.get('embeddings', {}).get('shape', 'N/A')}")
-            logger.info(f"   Índice: {stats.get('index', {}).get('size', 0)} vetores")
+            logger.info(f"   Embeddings: {stats.get('embeddings_shape', 'N/A')}")
+            logger.info(f"   Índice: {stats.get('index_size', 0)} vetores")
+            if stats.get('metadata_loaded'):
+                logger.info(f"   Metadados: {stats.get('metadata_count', 0)} registros")
+                logger.info(f"   Book IDs mapeados: {stats.get('book_id_mapping_count', 0)}")
             logger.info(f"   Bucket: {config.GCS_BUCKET_NAME}")
             
             return True
@@ -87,7 +84,6 @@ class EmbeddingService:
             return np.array([]), np.array([])
         
         try:
-            # 1. Gerar embedding da query
             query_embedding = self.embedding_model.encode(
                 [query], 
                 show_progress_bar=False,
@@ -95,7 +91,6 @@ class EmbeddingService:
                 normalize_embeddings=True
             )
             
-            # 2. Buscar usando consumidor GCS
             indices, distances = self.gcs_consumer.semantic_search(query_embedding, k)
             
             logger.debug(f"Busca: '{query[:50]}...' -> {len(indices)} resultados")
@@ -112,7 +107,7 @@ class EmbeddingService:
         return None
     
     def get_stats(self) -> dict:
-        """Retorna estatísticas"""
+        """Retorna estatísticas completas"""
         if self.gcs_consumer:
             stats = self.gcs_consumer.get_stats()
             stats['embedding_model'] = self.model_name
@@ -127,116 +122,18 @@ class EmbeddingService:
 
     def prepare_texts_batch(self, data: pd.DataFrame, batch_size: int = 128) -> List[str]:
         """Método mantido para compatibilidade"""
-        logger.warning("⚠️  Este é um consumidor puro - método prepare_texts_batch não faz nada")
+        logger.warning("⚠️ Este é um consumidor puro - método prepare_texts_batch não faz nada")
         return []
     
     def generate_embeddings(self, texts: List[str], batch_size: int = 64) -> np.ndarray:
         """Método mantido para compatibilidade"""
-        logger.warning("⚠️  Este é um consumidor puro - não gera embeddings")
+        logger.warning("⚠️ Este é um consumidor puro - não gera embeddings")
         return np.array([])
-    
-    
     
     def is_initialized(self) -> bool:
         """Verifica se está inicializado"""
-        return self.index_built and self.gcs_consumer is not None    
-
-    def get_index_stats(self) -> dict:
-        """Retorna estatísticas do índice - MANTENDO PARA COMPATIBILIDADE"""
-        if not self.index_built and not self.gcs_service:
-            return {
-                'index_built': False,
-                'message': 'Índice não carregado'
-            }
-        
-        if self.gcs_service:
-            return {
-                'index_built': True,
-                'index_size': self.gcs_service.index.ntotal if self.gcs_service.index else 0,
-                'embeddings_shape': self.gcs_service.embeddings.shape if self.gcs_service.embeddings is not None else None,
-                'model_name': self.model_name,
-                'device': self.device,
-                'use_gpu': self.use_gpu,
-                'mode': 'gcs_direct'
-            }
-        else:
-            return {
-                'index_built': True,
-                'index_size': self.index.ntotal if self.index else 0,
-                'embeddings_shape': self.book_embeddings.shape if self.book_embeddings is not None else None,
-                'model_name': self.model_name,
-                'device': self.device,
-                'use_gpu': self.use_gpu,
-                'mode': 'traditional'
-            }
-
-    def search_similar_books(self, book_id: int, k: int = 5) -> List[Tuple[int, float]]:
-        """Busca livros similares a um livro específico"""
-        if (not self.index_built and not self.gcs_service) or (self.book_embeddings is None and not self.gcs_service):
-            return []
-        
-        try:
-            if self.gcs_service:
-                # Modo GCS direto
-                if book_id < 0 or book_id >= len(self.gcs_service.embeddings):
-                    logger.warning(f"book_id {book_id} fora do range")
-                    return []
-                
-                book_embedding = self.gcs_service.embeddings[book_id:book_id+1]
-                distances, indices = self.gcs_service.index.search(book_embedding.astype('float32'), k + 1)
-            else:
-                # Modo tradicional
-                if book_id < 0 or book_id >= len(self.book_embeddings):
-                    logger.warning(f"book_id {book_id} fora do range (0-{len(self.book_embeddings)-1})")
-                    return []
-                
-                book_embedding = self.book_embeddings[book_id:book_id+1]
-                distances, indices = self.index.search(book_embedding.astype('float32'), k + 1)
-            
-            # Remover o próprio livro dos resultados
-            results = []
-            for i, (idx, dist) in enumerate(zip(indices[0], distances[0])):
-                if idx == book_id:  # Pular o próprio livro
-                    continue
-                if idx != -1:  # -1 indica resultado inválido no FAISS
-                    similarity = 1.0 / (1.0 + dist) if dist > 0 else 1.0
-                    results.append((int(idx), float(similarity)))
-            
-            return results[:k]
-            
-        except Exception as e:
-            logger.error(f"Erro ao buscar livros similares: {e}")
-            return []
-
-    def load_existing_index(self, index_path: str = None, embeddings_path: str = None) -> bool:
-        """Carrega um índice já existente de caminhos específicos"""
-        try:
-            if index_path is None or embeddings_path is None:
-                # Usar caminhos padrão
-                index_path = 'embeddings/local/book_index_gpu_index.faiss'
-                embeddings_path = 'embeddings/local/book_index_gpu_embeddings.npy'
-            
-            logger.info(f"Carregando índice de {index_path}")
-            
-            if not os.path.exists(index_path):
-                logger.error(f"Arquivo de índice não encontrado: {index_path}")
-                return False
-            
-            if not os.path.exists(embeddings_path):
-                logger.error(f"Arquivo de embeddings não encontrado: {embeddings_path}")
-                return False
-            
-            self.index = faiss.read_index(index_path)
-            self.book_embeddings = np.load(embeddings_path)
-            self.index_built = True
-            
-            logger.info(f"✅ Índice carregado: {self.book_embeddings.shape}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Erro ao carregar índice existente: {e}")
-            return False
-
+        return self.index_built and self.gcs_consumer is not None
+    
     def encode_query(self, query: str) -> np.ndarray:
         """Codifica uma query para embedding"""
         try:
@@ -250,26 +147,20 @@ class EmbeddingService:
                 normalize_embeddings=True
             )
             
-            return embedding[0]  # Retorna apenas o vetor, não a lista
+            return embedding[0]
             
         except Exception as e:
             logger.error(f"Erro ao codificar query: {e}")
             return np.array([])
-
-    def is_initialized(self) -> bool:
-        """Verifica se o serviço está inicializado"""
-        return self.embedding_model is not None and (self.index_built or self.gcs_service is not None)
-
+    
     def get_embedding_dimension(self) -> int:
         """Retorna a dimensão dos embeddings"""
-        if self.gcs_service and self.gcs_service.embeddings is not None:
-            return self.gcs_service.embeddings.shape[1]
+        if self.gcs_consumer and self.gcs_consumer.embeddings is not None:
+            return self.gcs_consumer.embeddings.shape[1]
         elif self.book_embeddings is not None:
             return self.book_embeddings.shape[1]
         elif self.embedding_model is not None:
-            # Tenta obter a dimensão do modelo
             try:
-                # Cria um embedding dummy para obter a dimensão
                 dummy_embedding = self.embedding_model.encode(
                     ["test"],
                     show_progress_bar=False,
@@ -277,6 +168,158 @@ class EmbeddingService:
                 )
                 return dummy_embedding.shape[1]
             except:
-                return 384  # Dimensão padrão do MiniLM
+                return 384
         else:
             return 0
+
+    # ============= NOVOS MÉTODOS PARA VERIFICAÇÃO DE COBERTURA =============
+    
+    def verificar_livros_sem_embedding(self, csv_path: str = None) -> dict:
+        """
+        Verifica quantos livros da base NÃO têm embedding.
+        
+        Args:
+            csv_path: Caminho no GCS para o arquivo CSV 
+                     (ex: "exports/20260119_231738_EDU_books.csv")
+        
+        Returns:
+            Dict com estatísticas de cobertura
+        """
+        if not self.gcs_consumer:
+            logger.error("❌ GCS Consumer não inicializado")
+            return None
+        
+        # Se não forneceu caminho, tenta inferir do nome dos embeddings
+        if csv_path is None:
+            embeddings_file = self.gcs_consumer.current_files.get('embeddings', '')
+            
+            # Extrai timestamp do formato: YYYYMMDD_HHMMSS_..._embeddings.npy
+            import re
+            match = re.search(r'(\d{8}_\d{6})', embeddings_file)
+            if match:
+                timestamp = match.group(1)
+                csv_path = f"exports/{timestamp}_EDU_books.csv"
+                logger.info(f"📄 Caminho do CSV inferido: {csv_path}")
+            else:
+                # Fallback para o padrão que você mostrou
+                csv_path = "exports/20260119_231738_EDU_books.csv"
+                logger.warning(f"⚠️ Usando caminho padrão: {csv_path}")
+        
+        # Chama o método de verificação
+        return self.gcs_consumer.verificar_cobertura_com_metadados(csv_path)
+    
+    def get_book_id_by_index(self, idx: int) -> Optional[str]:
+        """Retorna o book_id para um determinado índice do embedding"""
+        if self.gcs_consumer:
+            return self.gcs_consumer.get_book_id_by_index(idx)
+        return None
+    
+    def get_index_by_book_id(self, book_id: str) -> Optional[int]:
+        """Retorna o índice do embedding para um determinado book_id"""
+        if self.gcs_consumer:
+            return self.gcs_consumer.get_index_by_book_id(book_id)
+        return None
+    
+    def listar_livros_sem_embedding(self, csv_path: str = None, max_ids: int = 100) -> List[str]:
+        """
+        Retorna a lista de IDs dos livros sem embedding.
+        
+        Args:
+            csv_path: Caminho do CSV no GCS
+            max_ids: Número máximo de IDs para retornar
+        
+        Returns:
+            Lista com os IDs dos livros sem embedding
+        """
+        resultado = self.verificar_livros_sem_embedding(csv_path)
+        if resultado:
+            return resultado.get('ids_sem_embedding', [])[:max_ids]
+        return []
+    
+    def gerar_relatorio_cobertura(self, csv_path: str = None) -> str:
+        """
+        Gera um relatório formatado sobre a cobertura de embeddings.
+        
+        Returns:
+            String com relatório formatado
+        """
+        resultado = self.verificar_livros_sem_embedding(csv_path)
+        
+        if not resultado:
+            return "❌ Não foi possível gerar relatório de cobertura."
+        
+        relatorio = f"""
+╔══════════════════════════════════════════════════════════════╗
+║              RELATÓRIO DE COBERTURA DE EMBEDDINGS            ║
+╠══════════════════════════════════════════════════════════════╣
+║  📊 Estatísticas Gerais:                                     ║
+║     • Total de livros na base: {resultado['total_livros_csv']:>10}        ║
+║     • Livros COM embedding:   {resultado['total_com_embedding']:>10}        ║
+║     • Livros SEM embedding:   {resultado['total_sem_embedding']:>10}        ║
+║     • Cobertura:              {resultado['cobertura_percentual']:>9.2f}%     ║
+║                                                              ║
+║  🕒 Timestamp dos embeddings:                               ║
+║     {resultado.get('timestamp', 'N/A')[:50]}║
+║                                                              ║
+║  📋 Primeiros 10 IDs sem embedding:                         ║
+"""
+        
+        # Adiciona os primeiros 10 IDs sem embedding
+        ids_amostra = resultado.get('ids_sem_embedding', [])[:10]
+        for i, book_id in enumerate(ids_amostra, 1):
+            relatorio += f"║     {i:2d}. {book_id:<45} ║\n"
+        
+        if resultado['total_sem_embedding'] > 10:
+            relatorio += f"║     ... e mais {resultado['total_sem_embedding'] - 10} IDs       ║\n"
+        
+        relatorio += "╚══════════════════════════════════════════════════════════════╝"
+        
+        return relatorio
+
+    # ============= MÉTODOS DE COMPATIBILIDADE (NÃO REMOVER) =============
+    
+    def search_similar_books(self, book_id: int, k: int = 5) -> List[Tuple[int, float]]:
+        """Busca livros similares a um livro específico (MODO LEGADO)"""
+        logger.warning("⚠️ search_similar_books está obsoleto - use semantic_search com o book_id")
+        
+        # Tenta converter book_id para índice se for string
+        if isinstance(book_id, str):
+            idx = self.get_index_by_book_id(book_id)
+            if idx is None:
+                logger.warning(f"Book ID {book_id} não encontrado nos metadados")
+                return []
+            book_id = idx
+        
+        if (not self.index_built) or (self.book_embeddings is None):
+            return []
+        
+        try:
+            if book_id < 0 or book_id >= len(self.book_embeddings):
+                logger.warning(f"book_id {book_id} fora do range")
+                return []
+            
+            book_embedding = self.book_embeddings[book_id:book_id+1]
+            distances, indices = self.index.search(book_embedding.astype('float32'), k + 1)
+            
+            results = []
+            for i, (idx, dist) in enumerate(zip(indices[0], distances[0])):
+                if idx == book_id:
+                    continue
+                if idx != -1:
+                    similarity = 1.0 / (1.0 + dist) if dist > 0 else 1.0
+                    results.append((int(idx), float(similarity)))
+            
+            return results[:k]
+            
+        except Exception as e:
+            logger.error(f"Erro ao buscar livros similares: {e}")
+            return []
+    
+    def load_existing_index(self, index_path: str = None, embeddings_path: str = None) -> bool:
+        """Método mantido para compatibilidade"""
+        logger.warning("⚠️ load_existing_index está obsoleto - use initialize() com GCS")
+        return False
+    
+    def get_index_stats(self) -> dict:
+        """Retorna estatísticas do índice - compatibilidade"""
+        return self.get_stats()

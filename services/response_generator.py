@@ -224,52 +224,76 @@ class ResponseGenerator:
             these topics in their message.
             """
     
-    def _create_detailed_book_context(self, books: List[BookResult], user_context: str = "", language: str = 'pt') -> str:
-        """Cria um contexto detalhado sobre os livros para o prompt"""
+    # No response_generator.py, linha 235:
+
+    def _create_detailed_book_context(self, books: List, user_query: str, language: str) -> str:
+        """Cria contexto detalhado dos livros - VERSÃO COMPATÍVEL COM DICT E BOOKRESULT"""
         if not books:
             return ""
         
-        books_context = []
+        context_lines = []
         
-        for i, book in enumerate(books[:8], 1):  # Limitar a 8 livros para contexto
-            book_info = f"LIVRO {i}: '{book.title}'"
-            
-            # Autores
-            if book.authors:
-                authors = ', '.join(book.authors)
-                book_info += f"\n  Autor(es): {authors}"
-            
-            # Gêneros
-            if book.genres:
-                genres = ', '.join(book.genres)
-                book_info += f"\n  Gêneros: {genres}"
-            
-            # Avaliação
-            if book.rating > 0:
-                book_info += f"\n  Avaliação: ⭐ {book.rating:.1f}/5"
-                if book.num_ratings > 0:
-                    book_info += f" (baseado em {book.num_ratings} avaliações)"
-            
-            # Descrição
-            if book.description:
-                desc = book.description
-                book_info += f"\n  Descrição: {desc}"
-            
-            # Preço (se disponível)
-            if book.price and book.price != 'N/A':
-                book_info += f"\n  Preço: {book.price}"
-            
-            book_info += f"\n  ID no sistema: {book.book_id}"
-            book_info += "\n" + "-"*50
-            
-            books_context.append(book_info)
+        for i, book in enumerate(books[:10], 1):
+            try:
+                # Verificar se é dict ou BookResult
+                if isinstance(book, dict):
+                    title = book.get('title', '')
+                    authors = book.get('authors', [])
+                    description = book.get('description', '')
+                    genres = book.get('genres', [])
+                    rating = book.get('rating', 0)
+                    similarity_score = book.get('similarity_score', 0)
+                    search_method = book.get('search_method', '')
+                else:
+                    # É BookResult
+                    title = book.title
+                    authors = book.authors
+                    description = book.description
+                    genres = book.genres
+                    rating = getattr(book, 'rating', 0)
+                    similarity_score = getattr(book, 'similarity_score', 0)
+                    search_method = getattr(book, 'search_method', '')
+                
+                # Formatar autores
+                if isinstance(authors, list):
+                    authors_str = ', '.join(authors[:2])
+                else:
+                    authors_str = str(authors)
+                
+                # Formatar gêneros
+                if isinstance(genres, list):
+                    genres_str = ', '.join(genres[:3])
+                else:
+                    genres_str = str(genres)
+                
+                # Criar linha do livro
+                book_info = f"LIVRO {i}: '{title}'\n"
+                book_info += f"  Autores: {authors_str}\n"
+                book_info += f"  Gêneros: {genres_str}\n"
+                
+                if description:
+                    # Limitar descrição
+                    desc_limit = 150 if language == 'pt' else 120
+                    short_desc = description[:desc_limit] + '...' if len(description) > desc_limit else description
+                    book_info += f"  Descrição: {short_desc}\n"
+                
+                if rating > 0:
+                    book_info += f"  Avaliação: ⭐ {rating:.1f}/5.0\n"
+                
+                if similarity_score > 0:
+                    book_info += f"  Relevância: {similarity_score:.2f}\n"
+                
+                if search_method:
+                    book_info += f"  Método de busca: {search_method}\n"
+                
+                book_info += "-" * 40
+                context_lines.append(book_info)
+                
+            except Exception as e:
+                logger.error(f"Erro ao processar livro {i}: {e}")
+                continue
         
-        # Adicionar contexto do usuário se disponível
-        context_section = ""
-        if user_context:
-            context_section = f"\nCONTEXTO DO USUÁRIO: {user_context}\n"
-        
-        return context_section + "\n".join(books_context)
+        return "\n\n".join(context_lines)
     
     def _extract_user_context(self, message: str, language: str) -> str:
         """Extrai contexto do usuário APENAS da mensagem atual"""

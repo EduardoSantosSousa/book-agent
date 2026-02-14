@@ -439,125 +439,239 @@ class BookSearchEngine:
 
 
     def search_by_textual(self, query: str, filters: Dict = None, k: int = 16) -> List[BookResult]:
-        """Busca textual simples nos campos de texto"""
+        """Busca textual flexível e eficiente"""
         logger.info(f"Buscando textualmente: '{query}'")
-
-        # Normalizar a query
-        normalized_query = self._normalize_text_search(query)
-
-        # Expandir com sinônimos básicos
-        search_terms = [normalized_query]
-
-        # Sinônimos simples
-        synonyms = {
-            'superman': ['man of steel', 'clark kent', 'super-homem'],
-            'spider-man': ['homem-aranha', 'peter parker'],
-            'batman': ['dark knight', 'bruce wayne'],
-            'comics': ['quadrinhos', 'graphic novel', 'hq']
-        }
-
-        for term, syn_list in synonyms.items():
-            if term in normalized_query:
-                search_terms.extend(syn_list)
         
         start_time = time.time()
-        results = []
-        seen_titles = set()
         
-        query_lower = query.lower()
+        # Normalizar query
+        query_lower = query.lower().strip()
         
+        # Dividir em palavras-chave (remover palavras muito curtas)
+        query_words = [word for word in query_lower.split() if len(word) > 2]
+        
+        # Termos de busca expandidos (incluindo sinônimos básicos)
+        search_terms = [query_lower] + query_words
+        
+        # Expansão automática baseada em categorias comuns
+        self._expand_search_terms(query_lower, search_terms)
+        
+        # Pré-processar os livros para busca mais rápida
+        # Criar índices simples em memória
+        title_idx = {}
+        author_idx = {}
+        description_idx = {}
+        
+        # Construir índices rápidos (só para os primeiros caracteres)
         for idx, book in self.data.iterrows():
-            # Aplicar filtros
+            title = str(book.get('title', '')).lower()
+            if title:
+                # Adicionar ao índice de títulos (primeiras palavras)
+                first_word = title.split()[0] if title.split() else ""
+                if len(first_word) > 3:
+                    if first_word not in title_idx:
+                        title_idx[first_word] = []
+                    title_idx[first_word].append(idx)
+            
+            # Índice de autores
+            authors = self._extract_authors(book)
+            for author in authors:
+                author_lower = author.lower()
+                first_word = author_lower.split()[0] if author_lower.split() else ""
+                if len(first_word) > 3:
+                    if first_word not in author_idx:
+                        author_idx[first_word] = []
+                    author_idx[first_word].append(idx)
+        
+        results = []
+        seen_indices = set()
+        
+        # Fase 1: Busca direta (match exato ou parcial)
+        for idx, book in self.data.iterrows():
             if filters and not self._check_filters(book, filters):
                 continue
             
-            # Verificar em vários campos
-            score = 0
+            score = self._calculate_text_score(book, query_lower, query_words)
             
-            # Título (maior peso)
-            title = str(book.get('title', '')).lower()
-            if query_lower in title:
-                score += 3
-            elif any(word in title for word in query_lower.split()):
-                score += 2
-            
-            # Descrição
-            description = str(book.get('description', '')).lower()
-            if query_lower in description:
-                score += 2
-            elif any(word in description for word in query_lower.split()):
-                score += 1
-            
-            # Personagens
-            characters = str(book.get('characters', '')).lower()
-            if 'homem-aranha' in query_lower and ('spider-man' in characters or 'homem-aranha' in characters):
-                score += 5
-            elif 'spider-man' in query_lower and ('spider-man' in characters or 'homem-aranha' in characters):
-                score += 5
-            
-            # Gêneros
-            genres_text = str(book.get('genres', '')).lower() + ' ' + str(book.get('maingenre', '')).lower()
-            if 'comic' in query_lower or 'quadrinhos' in query_lower or 'hq' in query_lower:
-                if 'comic' in genres_text or 'graphic' in genres_text or 'quadrinhos' in genres_text:
-                    score += 2
-            
-            # Autor
-            author_text = str(book.get('author', '')).lower()
-            if 'marvel' in query_lower and 'marvel' in author_text:
-                score += 2
-            
-            if score > 0:
-                title = str(book['title'])
-                
-                if title in seen_titles:
+            if score > 0.1:  # Limiar mínimo
+                if idx in seen_indices:
                     continue
-                seen_titles.add(title)
+                seen_indices.add(idx)
                 
-                authors = self._extract_authors(book)
-                genres = self._extract_genres(book)
-                
-                # Garantir book_id
-                if 'book_id' in book:
-                    book_id = int(book['book_id'])
-                elif 'bookid' in book:
-                    book_id = int(book['bookid'])
-                else:
-                    book_id = idx + 1
-                
-                result = BookResult(
-                    book_id=book_id,
-                    title=title,
-                    authors=authors,
-                    description=str(book.get('description', ''))[:200],
-                    genres=genres,
-                    rating=float(book.get('rating', 0)),
-                    num_ratings=int(book.get('numRatings', 0)) if 'numRatings' in book else 0,
-                    price=str(book.get('price', 'N/A')),
-                    similarity_score=score / 10.0,  # Normalizar para 0-1
-                    search_method="textual"
-                )
-                
+                result = self._create_book_result(book, idx, score)
                 results.append(result)
                 
-                if len(results) >= k:
+                if len(results) >= k * 2:
                     break
         
-        # Ordenar por score
+        # Fase 2: Se poucos resultados, fazer busca mais abrangente
+        if len(results) < k:
+            logger.info(f"Poucos resultados ({len(results)}), expandindo busca...")
+            
+            # Buscar por palavras-chave individuais
+            for word in query_words:
+                if len(word) > 3:  # Só palavras significativas
+                    for idx, book in self.data.iterrows():
+                        if idx in seen_indices:
+                            continue
+                        
+                        if filters and not self._check_filters(book, filters):
+                            continue
+                        
+                        # Verificar se a palavra aparece em qualquer campo
+                        title = str(book.get('title', '')).lower()
+                        description = str(book.get('description', '')).lower()
+                        authors_str = ' '.join(self._extract_authors(book)).lower()
+                        
+                        if (word in title or word in description or word in authors_str):
+                            score = 0.3  # Score básico para match parcial
+                            
+                            if idx not in seen_indices:
+                                seen_indices.add(idx)
+                                result = self._create_book_result(book, idx, score)
+                                results.append(result)
+                                
+                                if len(results) >= k * 3:
+                                    break
+        
+        # Ordenar resultados por score
         results.sort(key=lambda x: x.similarity_score, reverse=True)
         
-        search_time = time.time() - start_time
-        logger.info(f"Busca textual: {len(results)} livros em {search_time:.2f}s")
+        # Remover duplicatas por título (com tolerância)
+        unique_results = self._deduplicate_results(results)
         
-        return results
+        search_time = time.time() - start_time
+        logger.info(f"Busca textual: {len(unique_results)} livros únicos em {search_time:.2f}s")
+        
+        return unique_results[:k]
 
-    def _remove_duplicates(self, results: List[BookResult]) -> List[BookResult]:
-        """Remove duplicatas por book_id"""
-        seen_ids = set()
+    def _expand_search_terms(self, query: str, search_terms: list):
+        """Expande termos de busca automaticamente"""
+        
+        # Mapeamento de termos comuns
+        term_expansions = {
+            # Gêneros literários
+            'romance': ['love', 'romantic', 'amor'],
+            'fantasia': ['fantasy', 'magic', 'magical'],
+            'ficção científica': ['scifi', 'science fiction', 'sci-fi'],
+            'terror': ['horror', 'scary', 'frightening'],
+            'mistério': ['mystery', 'suspense', 'thriller'],
+            'biografia': ['biography', 'memoir', 'autobiography'],
+            
+            # Formatos
+            'mangá': ['manga', 'graphic novel', 'comic', 'quadrinhos'],
+            'quadrinhos': ['comics', 'graphic novel', 'banda desenhada'],
+            'graphic novel': ['comic book', 'manga', 'quadrinhos'],
+            
+            # Séries específicas populares
+            'dragon ball': ['akira toriyama', 'goku', 'dragonball'],
+            'harry potter': ['jk rowling', 'hogwarts'],
+            'senhor dos anéis': ['lord of the rings', 'tolkien'],
+            'game of thrones': ['george martin', 'asoiaf'],
+            
+            # Autores famosos
+            'stephen king': ['king', 'horror writer'],
+            'agatha christie': ['christie', 'detective'],
+            'j.k. rowling': ['rowling', 'harry potter author'],
+        }
+        
+        # Adicionar expansões
+        for term, expansions in term_expansions.items():
+            if term in query:
+                search_terms.extend(expansions)
+        
+        # Adicionar variações linguísticas (português-inglês)
+        if any(word in query for word in ['livro', 'livros', 'obra']):
+            search_terms.extend(['book', 'books', 'work'])
+        
+        return search_terms
+
+    def _calculate_text_score(self, book, query: str, query_words: list) -> float:
+        """Calcula score de relevância textual"""
+        score = 0.0
+        
+        # Título (peso alto)
+        title = str(book.get('title', '')).lower()
+        if query in title:
+            score += 3.0
+        elif any(word in title for word in query_words):
+            score += 2.0
+        
+        # Descrição (peso médio)
+        description = str(book.get('description', '')).lower()
+        if query in description:
+            score += 2.0
+        elif any(word in description for word in query_words):
+            score += 1.0
+        
+        # Autor (peso médio)
+        authors = self._extract_authors(book)
+        authors_lower = ' '.join([a.lower() for a in authors])
+        if query in authors_lower:
+            score += 2.0
+        elif any(word in authors_lower for word in query_words):
+            score += 1.0
+        
+        # Gêneros (peso baixo)
+        genres = ' '.join(self._extract_genres(book)).lower()
+        if query in genres:
+            score += 1.0
+        elif any(word in genres for word in query_words):
+            score += 0.5
+        
+        # Personagens (se disponível)
+        characters = str(book.get('characters', '')).lower()
+        if query in characters:
+            score += 1.5
+        
+        return score
+
+    def _create_book_result(self, book, idx: int, score: float) -> BookResult:
+        """Cria objeto BookResult a partir de um livro"""
+        # Normalizar score para 0-1
+        normalized_score = min(score / 5.0, 1.0)
+        
+        # Garantir book_id
+        if 'book_id' in book:
+            book_id = int(book['book_id'])
+        elif 'bookid' in book:
+            book_id = int(book['bookid'])
+        else:
+            book_id = idx + 1
+        
+        return BookResult(
+            book_id=book_id,
+            title=str(book.get('title', '')),
+            authors=self._extract_authors(book),
+            description=str(book.get('description', ''))[:200],
+            genres=self._extract_genres(book),
+            rating=float(book.get('rating', 0)),
+            num_ratings=int(book.get('numRatings', 0)) if 'numRatings' in book else 0,
+            price=str(book.get('price', 'N/A')),
+            similarity_score=normalized_score,
+            search_method="textual"
+        )
+
+    def _deduplicate_results(self, results: List[BookResult]) -> List[BookResult]:
+        """Remove resultados duplicados com base em similaridade de título"""
         unique_results = []
+        seen_titles = set()
         
         for result in results:
-            if result.book_id not in seen_ids:
-                seen_ids.add(result.book_id)
+            # Normalizar título para comparação
+            title_lower = result.title.lower()
+            
+            # Verificar se é similar a um título já visto
+            is_duplicate = False
+            for seen_title in seen_titles:
+                # Verificar similaridade simples
+                if (title_lower in seen_title or seen_title in title_lower or
+                    title_lower.replace(' ', '') == seen_title.replace(' ', '')):
+                    is_duplicate = True
+                    break
+            
+            if not is_duplicate:
+                seen_titles.add(title_lower)
                 unique_results.append(result)
         
         return unique_results
@@ -685,3 +799,49 @@ class BookSearchEngine:
             "avg_time_seconds": avg_time,
             "history": self.search_history[-10:]  # Últimas 10 buscas
         }
+    
+    def search_specific_title(self, title_query: str) -> List[BookResult]:
+        """Busca específica por título (ignora embeddings, só busca textual)"""
+        logger.info(f"🔍 Busca específica por título: '{title_query}'")
+        
+        title_lower = title_query.lower()
+        results = []
+        
+        for idx, book in self.data.iterrows():
+            book_title = str(book.get('title', '')).lower()
+            
+            # Verificar correspondência exata ou parcial
+            if title_lower in book_title or book_title in title_lower:
+                # Calcular similaridade baseada na correspondência
+                if title_lower == book_title:
+                    similarity = 1.0
+                elif title_lower in book_title:
+                    similarity = 0.8
+                else:
+                    similarity = 0.6
+                
+                # Criar resultado
+                if 'book_id' in book:
+                    book_id = int(book['book_id'])
+                elif 'bookid' in book:
+                    book_id = int(book['bookid'])
+                else:
+                    book_id = idx + 1
+                
+                result = BookResult(
+                    book_id=book_id,
+                    title=str(book.get('title', '')),
+                    authors=self._extract_authors(book),
+                    description=str(book.get('description', ''))[:200],
+                    genres=self._extract_genres(book),
+                    rating=float(book.get('rating', 0)),
+                    num_ratings=int(book.get('numRatings', 0)) if 'numRatings' in book else 0,
+                    price=str(book.get('price', 'N/A')),
+                    similarity_score=similarity,
+                    search_method="exact_title"
+                )
+                
+                results.append(result)
+        
+        logger.info(f"Encontrados {len(results)} livros com título contendo '{title_query}'")
+        return results

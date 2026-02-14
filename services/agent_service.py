@@ -9,7 +9,6 @@ from functools import lru_cache
 import hashlib
 from utils.data_loader import DataLoader
 from services.embedding_service import EmbeddingService
-#from services.ollama_service import OllamaService
 from services.groq_service import GroqService
 from models.schemas import SearchRequest
 import json
@@ -60,7 +59,6 @@ class BookAgentService:
         # 🔥 MEMÓRIA CENTRAL
         self.memory = ConversationContextManager(
             redis_url=os.getenv("REDIS_URL"),
-            #redis_url="redis://redis-service.book-agent-ns.svc.cluster.local:6379/0",
             max_context_messages=50,
             ttl_hours=5,
         )
@@ -78,8 +76,8 @@ class BookAgentService:
             
             # Configurar DataLoader para carregar do GCS
             self.data_loader = DataLoader(
-                gcs_bucket="book-agent-embeddings-bucket",  # Seu bucket
-                gcs_prefix="exports/"  # Pasta onde estão os CSVs
+                gcs_bucket="book-agent-embeddings-bucket",
+                gcs_prefix="exports/"
             )
             
             if not self.data_loader.load_data():
@@ -144,16 +142,6 @@ class BookAgentService:
             )
 
             logger.info("🤖 Groq configurado.")
-
-            #logger.info("🤖 Conectando ao Ollama...")
-            #ollama_base_url = (self.config.get('ollama_base_url') or os.getenv("OLLAMA_BASE_URL", "http://ollama:11434"))
-            #ollama_base_url = (self.config.get('ollama_base_url') or os.getenv("OLLAMA_BASE_URL", "http://ollama-service.book-agent-ns.svc.cluster.local:11434"))
-            #self.ollama_service = OllamaService(
-            #    model=self.config.get('ollama_model', 'qwen2.5:1.5b'),
-            #    base_url=ollama_base_url
-            #)
-
-            #logger.info(f"🤖 Ollama base URL configurada: {ollama_base_url}")
             
             # 5. Criar motor de busca
             logger.info("🔍 Criando motor de busca...")
@@ -180,15 +168,11 @@ class BookAgentService:
             logger.info("🌐 Inicializando tradução...")
             self.translation_service = get_translation_service()
             
-
             # 9. Inicializar refinador de queries
             logger.info("🧠 Inicializando refinador de queries...")
             self.query_refiner = QueryRefinerAgent(self.ollama_service)
                 
-            logger.info("🎉 Book Agent Service inicializado!")
-
             self.initialized = True
-
             logger.info("🎉 Book Agent Service inicializado!")
             logger.info("   Fonte dados: GCS (versão mais recente)")
             logger.info(f"   Total livros: {len(self.data_loader.data)}")
@@ -202,8 +186,68 @@ class BookAgentService:
             self.initialized = False
             raise
 
-    # ADICIONE ESTES MÉTODOS NO SEU agent_service.py
-# Coloque-os ANTES do método process_message
+    # ==============================================
+    # MÉTODOS AUXILIARES - CONVERSÕES
+    # ==============================================
+
+    def _convert_book_results_to_dicts(self, books: List) -> List[Dict]:
+        """Converte objetos BookResult para dicionários"""
+        if not books:
+            return []
+        
+        books_dicts = []
+        for book in books:
+            # Verificar se é BookResult (tem atributo book_id)
+            if hasattr(book, 'book_id'):
+                book_dict = {
+                    "book_id": book.book_id,
+                    "title": book.title,
+                    "authors": book.authors,
+                    "description": book.description,
+                    "genres": book.genres,
+                    "rating": book.rating,
+                    "similarity_score": book.similarity_score,
+                    "search_method": book.search_method
+                }
+                # Adicionar campos opcionais se existirem
+                if hasattr(book, 'num_ratings'):
+                    book_dict["num_ratings"] = book.num_ratings
+                if hasattr(book, 'price'):
+                    book_dict["price"] = book.price
+                
+                books_dicts.append(book_dict)
+            # Se já for dicionário, usar como está
+            elif isinstance(book, dict):
+                books_dicts.append(book)
+            else:
+                logger.warning(f"Tipo de livro desconhecido: {type(book)}")
+        
+        return books_dicts
+
+    def _format_books_for_response(self, books: List) -> List[Dict]:
+        """Formata livros para resposta da API"""
+        return self._convert_book_results_to_dicts(books)
+
+    def _book_dict_to_result(self, book_dict: Dict):
+        """Converte dicionário de livro para objeto BookResult"""
+        from .search_engine import BookResult
+        
+        return BookResult(
+            book_id=book_dict.get('book_id', 0),
+            title=book_dict.get('title', ''),
+            authors=book_dict.get('authors', []),
+            description=book_dict.get('description', ''),
+            genres=book_dict.get('genres', []),
+            rating=book_dict.get('rating', 0),
+            num_ratings=book_dict.get('num_ratings', 0),
+            price=book_dict.get('price', 'N/A'),
+            similarity_score=book_dict.get('similarity_score', 0.0),
+            search_method=book_dict.get('search_method', 'redis_cache')
+        )
+
+    # ==============================================
+    # MÉTODOS DE CONTEXTO E BUSCA
+    # ==============================================
 
     def _analyze_context(self, message: str, conversation_history: List[Dict], 
                         last_recommendations: List[Dict], language: str) -> Dict:
@@ -306,8 +350,6 @@ class BookAgentService:
         
         return detected_topics[0] if detected_topics else 'general'
     
-    # Em agent_service.py, adicione este método:
-
     async def _intelligent_search(self, message: str, user_profile: Dict, 
                                 conversation_history: List[Dict], language: str) -> List:
         """
@@ -362,7 +404,6 @@ class BookAgentService:
             
             # Ordenar por relevância
             if search_intent == "comics":
-                # Para comics, priorizar títulos que contêm palavras-chave
                 unique_results.sort(
                     key=lambda x: (
                         1 if any(keyword.lower() in x.title.lower() 
@@ -372,7 +413,6 @@ class BookAgentService:
                     reverse=True
                 )
             else:
-                # Ordenar normal
                 unique_results.sort(key=lambda x: x.similarity_score, reverse=True)
             
             logger.info(f"📚 Resultados combinados: {len(unique_results)} livros")
@@ -382,10 +422,6 @@ class BookAgentService:
             logger.error(f"❌ Erro na busca inteligente: {e}")
             # Fallback para busca semântica simples
             return self.search_engine.search_by_semantic(normalized_query, k=8)
-
-
-
-
 
     def _determine_search_strategy(self, message: str, intent: str, 
                                 context_analysis: Dict, last_recommendations: List[Dict]) -> str:
@@ -446,19 +482,29 @@ class BookAgentService:
         seen_ids = set()
         
         for book in books:
-            book_id = getattr(book, 'book_id', None) or book.get('book_id')
+            if hasattr(book, 'book_id'):
+                book_id = book.book_id
+            else:
+                book_id = book.get('book_id')
+                
             if book_id and book_id not in seen_ids:
                 seen_ids.add(book_id)
                 unique_books.append(book)
             elif not book_id:  # Se não tem ID, usa título como identificador
-                title = getattr(book, 'title', '') or book.get('title', '')
+                if hasattr(book, 'title'):
+                    title = book.title
+                else:
+                    title = book.get('title', '')
+                    
                 if title not in seen_ids:
                     seen_ids.add(title)
                     unique_books.append(book)
         
-        return unique_books    
+        return unique_books
 
-
+    # ==============================================
+    # MÉTODO PRINCIPAL - process_message
+    # ==============================================
 
     async def process_message(self, message: str, session_id: str = "default", language: str = "pt") -> Dict:
         """Processa uma mensagem do usuário COM HISTÓRICO DO REDIS"""
@@ -481,15 +527,10 @@ class BookAgentService:
                 
                 logger.info(f"📖 Histórico Redis - Sessão '{session_id}':")
                 logger.info(f"   📝 Mensagens: {len(conversation_history)}")
-                logger.info(f"   📚 Últimas recomendações: {len(last_recommendations) if last_recommendations else 0} livros")
+                logger.info(f"   📚 Últimas recomendações: {len(last_recommendations)} livros")
 
-                # Log das últimas mensagens para debug
-                for msg in conversation_history[-3:]:
-                    role = "👤" if msg.get("role") == "user" else "🤖"
-                    logger.info(f"   {role}: {msg.get('content', '')[:50]}...")
-            
             # ==============================================
-            # 2. ANALISAR INTENÇÃO CONSIDERANDO O HISTÓRICO
+            # 2. ANALISAR INTENÇÃO
             # ==============================================
             intent = self._analyze_intent(message)
             
@@ -500,7 +541,7 @@ class BookAgentService:
             
             if is_reference_to_previous:
                 logger.info(f"🔍 Referência a livros anteriores detectada")
-                intent = "book_conversation"  # Sobrescreve intenção para conversa sobre livro
+                intent = "book_conversation"
             
             # ==============================================
             # 3. CASOS ESPECIAIS: CLOSING E AUTHOR
@@ -520,11 +561,16 @@ class BookAgentService:
                 
                 # Salvar no Redis
                 if self.book_conversation_service:
+                    books_dicts = self._convert_book_results_to_dicts([])
                     self.book_conversation_service.context_manager.add_message(
                         session_id, 'user', message, intent=intent
                     )
                     self.book_conversation_service.context_manager.add_message(
-                        session_id, 'assistant', response, intent=intent
+                        session_id, 
+                        "assistant", 
+                        response, 
+                        books=books_dicts,
+                        intent=intent
                     )
                 
                 result = {
@@ -554,26 +600,31 @@ class BookAgentService:
                     search_query = self._build_search_query(message, user_profile)
                     books = self.search_engine.search_by_semantic(search_query, k=10)
                 
-                # Gerar resposta COM HISTÓRICO
-                response = await self.response_generator.generate_personalized_recommendation(
+                # Converter BookResult para dicionários antes de passar para response_generator
+                books_dicts = self._convert_book_results_to_dicts(books)
+                
+                # Gerar resposta
+                response_text = await self.response_generator.generate_personalized_recommendation(
                     user_message=message,
-                    books=books,
+                    books=books_dicts,
                     intent=intent,
                     language=language,
                     conversation_history=conversation_history
                 )
                 
-                # Salvar no Redis
+                # Salvar no Redis - IMPORTANTE: passar dicionários, não objetos BookResult
                 if self.book_conversation_service:
                     self.book_conversation_service.context_manager.add_message(
                         session_id, 'user', message, intent=intent
                     )
                     self.book_conversation_service.context_manager.add_message(
-                        session_id, 'assistant', response, books=books[:3], intent=intent
+                        session_id, 'assistant', response_text, 
+                        books=books_dicts[:3],  # Passar dicionários convertidos
+                        intent=intent
                     )
                 
                 result = {
-                    'response': response,
+                    'response': response_text,
                     'intent': intent,
                     'user_profile': self._extract_user_profile(message, language),
                     'books_found': len(books),
@@ -586,57 +637,11 @@ class BookAgentService:
                 return result
             
             # ==============================================
-            # 4. CONVERSA SOBRE LIVRO ESPECÍFICO
-            # ==============================================
-            
-            # Verificar se é conversa sobre livro específico
-            is_book_conversation = self._is_book_conversation(message, language) or intent == "book_conversation"
-            
-            if is_book_conversation and self.book_conversation_service:
-                logger.info(f"🔍 Conversa sobre livro específico detectada")
-                
-                # Primeiro, tentar encontrar nos livros anteriormente recomendados
-                book_from_history = None
-                if last_recommendations:
-                    # Extrair referência a livro da mensagem
-                    detected_books = self.book_conversation_service.detect_multiple_books(message, language)
-                    logger.info(f"📘 Livros detectados na mensagem: {len(detected_books)}")
-                    
-                    for title, book_id in detected_books:
-                        # Buscar no histórico de recomendações
-                        book_from_history = self.book_conversation_service.get_book_from_context(
-                            session_id, title, book_id
-                        )
-                        if book_from_history:
-                            logger.info(f"✅ Livro encontrado no histórico: {book_from_history.get('title')}")
-                            break
-                
-                # Se encontrou livro no histórico, usar serviço de conversação
-                if book_from_history:
-                    logger.info(f"📚 Usando livro do histórico para conversa")
-                    
-                    conversation_result = await self.book_conversation_service.chat_about_book(
-                        message, session_id, language
-                    )
-                    
-                    response_data = {
-                        'response': conversation_result['response'],
-                        'intent': 'book_conversation',
-                        'books_found': 1 if conversation_result.get('book') else 0,
-                        'processing_time_seconds': (datetime.now() - start_time).total_seconds(),
-                        'session_id': session_id,
-                        'language': language,
-                        'books': [conversation_result['book']] if conversation_result.get('book') else []
-                    }
-                    
-                    return response_data
-            
-            # ==============================================
-            # 5. SISTEMA HÍBRIDO INTELIGENTE DE BUSCA
+            # 4. SISTEMA HÍBRIDO INTELIGENTE DE BUSCA
             # ==============================================
             
             user_profile = self._extract_user_profile(message, language)
-            books = []  # INICIALIZAÇÃO CRÍTICA - SEMPRE definir books como lista vazia
+            books = []
             
             logger.info(f"🎯 SISTEMA HÍBRIDO - Intenção: {intent}")
             logger.info(f"📊 Perfil extraído: {user_profile}")
@@ -666,17 +671,14 @@ class BookAgentService:
                 
                 # Executar estratégia de busca
                 if search_strategy == "new_search":
-                    # Busca completamente nova
                     logger.info("🔄 Busca completamente nova")
                     books = await self._intelligent_search(
                         search_query, user_profile, conversation_history, language
                     )
                     
                 elif search_strategy == "context_boosted":
-                    # Busca nova com boost do contexto anterior
                     logger.info("🚀 Busca com boost de contexto")
                     
-                    # Adicionar contexto das recomendações anteriores à query
                     if last_recommendations:
                         context_keywords = self._extract_keywords_from_books(last_recommendations[:2])
                         boosted_query = f"{search_query} {context_keywords}"
@@ -690,23 +692,20 @@ class BookAgentService:
                         )
                         
                 elif search_strategy == "similar_to_previous":
-                    # Buscar livros similares aos anteriores (para continuidade)
                     logger.info("📚 Buscando livros similares aos anteriores")
                     
                     similar_books = []
-                    for book in last_recommendations[:2]:
-                        query = f"{book.get('title', '')}"
-                        if book.get('authors'):
-                            query += f" {book.get('authors')[0]}"
+                    for book_dict in last_recommendations[:2]:
+                        query = f"{book_dict.get('title', '')}"
+                        if book_dict.get('authors'):
+                            query += f" {book_dict.get('authors')[0]}"
                         
                         similar = self.search_engine.search_by_semantic(query, k=4)
                         similar_books.extend(similar)
                     
-                    # Garantir unicidade
                     books = self._remove_duplicate_books(similar_books)[:8]
                     
                 elif search_strategy == "use_previous_only":
-                    # Usar apenas livros já recomendados
                     logger.info("💾 Usando apenas livros já recomendados")
                     
                     previous_books = []
@@ -717,9 +716,8 @@ class BookAgentService:
                     books = previous_books[:8]
                 
                 else:
-                    # Fallback: busca normal
                     logger.info("⚡ Fallback: busca normal")
-                    books = self.search_engine.search(search_query, search_type="hybrid", k=8)
+                    books = self.search_engine.search_by_semantic(search_query, k=8)
                     
             except Exception as e:
                 logger.error(f"❌ Erro no sistema híbrido de busca: {e}")
@@ -728,29 +726,25 @@ class BookAgentService:
                 logger.info(f"🔄 Fallback: busca simples com query: {search_query}")
                 books = self.search_engine.search_by_semantic(search_query, k=5)
             
-            # Log dos resultados da busca
-            logger.info(f"📚 Resultados da busca: {len(books)} livros encontrados")
-            
-            # ==============================================
-            # 6. GERAR RESPOSTA COM HISTÓRICO COMPLETO
-            # ==============================================
-            
             # Garantir que temos livros para recomendar
             if not books and last_recommendations:
                 logger.info(f"⚠️ Nenhum livro novo encontrado, usando recomendações anteriores")
                 books = [self._book_dict_to_result(book) for book in last_recommendations[:3]]
             
+            # Converter BookResult para dicionários antes de passar para response_generator
+            books_dicts = self._convert_book_results_to_dicts(books[:5])
+            
             # Gerar resposta PERSONALIZADA COM HISTÓRICO
-            response = await self.response_generator.generate_personalized_recommendation(
+            response_text = await self.response_generator.generate_personalized_recommendation(
                 user_message=message,
-                books=books[:5],  # Limitar a 5 livros
+                books=books_dicts,
                 intent=intent,
                 language=language,
-                conversation_history=conversation_history  # HISTÓRICO PASSA AQUI
+                conversation_history=conversation_history
             )
             
             # ==============================================
-            # 7. SALVAR NO REDIS PARA PRÓXIMAS INTERAÇÕES
+            # 5. SALVAR NO REDIS PARA PRÓXIMAS INTERAÇÕES
             # ==============================================
             
             if self.book_conversation_service:
@@ -759,10 +753,10 @@ class BookAgentService:
                     session_id, 'user', message, intent=intent
                 )
                 
-                # Salvar resposta do assistente COM LIVROS
-                response_books = self._format_books_for_response(books[:3])
+                # Salvar resposta do assistente COM LIVROS (dicionários)
+                response_books = self._convert_book_results_to_dicts(books[:3])
                 self.book_conversation_service.context_manager.add_message(
-                    session_id, 'assistant', response, 
+                    session_id, 'assistant', response_text, 
                     books=response_books, 
                     intent=intent
                 )
@@ -770,11 +764,11 @@ class BookAgentService:
                 logger.info(f"💾 Salvo no Redis - Total mensagens: {len(conversation_history) + 2}")
             
             # ==============================================
-            # 8. PREPARAR RESPOSTA FINAL
+            # 6. PREPARAR RESPOSTA FINAL
             # ==============================================
             
             result = {
-                'response': response,
+                'response': response_text,
                 'intent': intent,
                 'user_profile': user_profile,
                 'books_found': len(books),
@@ -798,7 +792,7 @@ class BookAgentService:
             raise
 
     # ==============================================
-    # FUNÇÕES AUXILIARES PARA O REDIS
+    # FUNÇÕES AUXILIARES
     # ==============================================
 
     def _is_reference_to_previous_books(self, message: str, last_recommendations: List[Dict], 
@@ -831,113 +825,105 @@ class BookAgentService:
         
         return False
 
-    def _is_new_topic(self, message: str, conversation_history: List[Dict], language: str) -> bool:
-        """Verifica se é um novo tópico de conversa"""
-        if not conversation_history:
-            return True
+    def _build_search_query(self, message: str, user_profile: Dict) -> str:
+        """Constrói query de busca considerando perfil do usuário"""
+        query_parts = []
         
-        # Últimas 2 mensagens do histórico
-        last_messages = [msg.get('content', '').lower() for msg in conversation_history[-2:]]
+        # Adicionar termos da mensagem
+        query_parts.append(message)
         
-        # Palavras-chave que indicam novo tópico
-        new_topic_keywords = {
-            'pt': ['outro', 'diferente', 'novo', 'mudar', 'agora', 'mas', 'então', 'ok', 'certo'],
-            'en': ['other', 'different', 'new', 'change', 'now', 'but', 'so', 'ok', 'right']
-        }
+        # Adicionar termos baseados no perfil
+        if user_profile.get('study_area'):
+            query_parts.append(user_profile['study_area'])
         
-        keywords = new_topic_keywords.get(language, new_topic_keywords['pt'])
+        if user_profile.get('level') == 'beginner':
+            query_parts.append("beginner introduction fundamentals")
+        elif user_profile.get('level') == 'advanced':
+            query_parts.append("advanced expert professional")
         
-        message_lower = message.lower()
+        if 'learning' in user_profile.get('goals', []):
+            query_parts.append("learning education tutorial guide")
         
-        # Se a mensagem contém palavras de novo tópico
-        if any(keyword in message_lower for keyword in keywords):
-            return True
-        
-        # Análise de similaridade simples
-        common_words = set(message_lower.split()) & set(' '.join(last_messages).split())
-        if len(common_words) < 2:  # Poucas palavras em comum
-            return True
-        
-        return False
+        return ' '.join(query_parts)
 
-    def _book_dict_to_result(self, book_dict: Dict) -> Dict:
-        """Converte dicionário de livro para formato de resultado"""
-        from .search_engine import BookResult
+    def _analyze_intent(self, message: str) -> str:
+        """Analisa a intenção da mensagem"""
+        message_lower = message.lower().strip()
         
-        return BookResult(
-            book_id=book_dict.get('book_id', 0),
-            title=book_dict.get('title', ''),
-            authors=book_dict.get('authors', []),
-            description=book_dict.get('description', ''),
-            genres=book_dict.get('genres', []),
-            rating=book_dict.get('rating', 0),
-            num_ratings=book_dict.get('num_ratings', 0),
-            price=book_dict.get('price', 'N/A'),
-            similarity_score=book_dict.get('similarity_score', 0.0),
-            search_method=book_dict.get('search_method', 'redis_cache')
-        )
+        logger.info(f"📝 Analisando intenção da mensagem: '{message_lower}'")
+        
+        # Verificar se é sobre CARREIRA/LIDERANÇA
+        career_keywords = [
+            'promovido', 'promoção', 'carreira', 'liderança', 'líder', 'gestor', 'gerente',
+            'promoted', 'promotion', 'career', 'leadership', 'leader', 'manager'
+        ]
+        
+        if any(keyword in message_lower for keyword in career_keywords):
+            logger.info("🎯 Intenção: career_growth (palavras de carreira detectadas)")
+            return 'career_growth'
+        
+        # Verificar se menciona GÊNERO específico
+        genre_keywords = [
+            'fantasia', 'fantasy', 'ficção científica', 'sci-fi', 'science fiction',
+            'romance', 'terror', 'horror', 'mistério', 'mystery', 'suspense',
+            'história', 'history', 'biografia', 'biography', 'autoajuda', 'self-help',
+            'negócios', 'business', 'ciência', 'science', 'tecnologia', 'technology'
+        ]
+        
+        # Se menciona gênero E palavras de recomendação, é "general"
+        book_request_words = ['recomende', 'recomendação', 'sugestão', 'livro', 'livros',
+                            'recommend', 'recommendation', 'suggestion', 'book', 'books']
+        
+        has_genre = any(genre in message_lower for genre in genre_keywords)
+        has_book_request = any(word in message_lower for word in book_request_words)
+        
+        if has_genre and has_book_request:
+            logger.info("🎯 Intenção: general (gênero + pedido de livro detectado)")
+            return 'general'
+        
+        # Verificar se menciona AUTOR específico
+        author_keywords = [
+            'autor', 'autora', 'writer', 'author', 'escritor', 'escritora',
+            'livros de', 'obras de', 'books by'
+        ]
+        
+        # Verificar autores conhecidos
+        known_authors = [
+            'j.k. rowling', 'jk rowling', 'stephen king', 'george orwell',
+            'agatha christie', 'j.r.r. tolkien', 'dan brown', 'paulo coelho',
+            'suzanne collins', 'veronica roth', 'rick riordan'
+        ]
+        
+        has_author_keyword = any(keyword in message_lower for keyword in author_keywords)
+        has_known_author = any(author in message_lower for author in known_authors)
+        
+        if has_author_keyword or has_known_author:
+            logger.info("🎯 Intenção: author (autor detectado)")
+            return 'author'
+        
+        # Se tem palavras de pedido de livros, é general
+        if has_book_request:
+            logger.info("🎯 Intenção: general (solicitação de livros detectada)")
+            return 'general'
+        
+        # Verificar closing (agradecimento/despedida)
+        closing_keywords = [
+            'obrigado', 'obrigada', 'valeu', 'thank you', 'thanks', 'bye', 'tchau',
+            'até logo', 'goodbye', 'adeus'
+        ]
+        
+        # Só é closing se NÃO tem palavras de pedido
+        is_closing = any(keyword in message_lower for keyword in closing_keywords)
+        if is_closing and not has_book_request:
+            logger.info("🎯 Intenção: closing (agradecimento/despedida)")
+            return 'closing'
+        
+        # Padrão
+        logger.info("🎯 Intenção: social (padrão)")
+        return 'social'
 
-    def _format_books_for_response(self, books: List) -> List[Dict]:
-        """Formata livros para resposta da API"""
-        formatted_books = []
-        
-        for book in books:
-            if hasattr(book, 'book_id'):  # É BookResult
-                formatted_books.append({
-                    'book_id': book.book_id,
-                    'title': book.title,
-                    'authors': book.authors,
-                    'description': book.description[:150] + '...' if len(book.description) > 150 else book.description,
-                    'genres': book.genres[:3],
-                    'rating': round(book.rating, 1),
-                    'num_ratings': book.num_ratings,
-                    'similarity_score': round(book.similarity_score, 3) if hasattr(book, 'similarity_score') else 0.0
-                })
-            else:  # Já é dicionário
-                formatted_books.append({
-                    'book_id': book.get('book_id', 0),
-                    'title': book.get('title', ''),
-                    'authors': book.get('authors', []),
-                    'description': (book.get('description', '')[:150] + '...' 
-                                if len(book.get('description', '')) > 150 else book.get('description', '')),
-                    'genres': book.get('genres', [])[:3],
-                    'rating': round(book.get('rating', 0), 1),
-                    'num_ratings': book.get('num_ratings', 0),
-                    'similarity_score': round(book.get('similarity_score', 0), 3)
-                })
-        
-        return formatted_books        
-
-
-    def _extract_genre(self, message: str) -> Optional[str]:
-        """Extrai gênero da mensagem do usuário - versão simplificada"""
-        message_lower = message.lower()
-        
-        # Mapeamento direto de palavras-chave para gêneros
-        genre_keywords = {
-            'fantasia': ['fantasia', 'fantasy'],
-            'ficção científica': ['ficção científica', 'sci-fi', 'science fiction', 'ficcao cientifica'],
-            'romance': ['romance', 'romantic'],
-            'terror': ['terror', 'horror'],
-            'mistério': ['mistério', 'mystery', 'suspense'],
-            'história': ['história', 'history', 'historia'],
-            'biografia': ['biografia', 'biography'],
-            'autoajuda': ['autoajuda', 'self-help', 'auto-ajuda'],
-            'negócios': ['negócios', 'business', 'empreendedorismo'],
-            'ciência': ['ciência', 'science'],
-            'tecnologia': ['tecnologia', 'technology', 'programação'],
-            'culinária': ['culinária', 'culinaria', 'cooking'],
-        }
-        
-        for genre, keywords in genre_keywords.items():
-            for keyword in keywords:
-                if keyword in message_lower:
-                    return genre
-        
-        return None
-    
     def _extract_author(self, message: str) -> Optional[str]:
-        """Extrai autor da mensagem do usuário - VERSÃO MELHORADA"""
+        """Extrai autor da mensagem do usuário"""
         message_lower = message.lower()
         
         # Autores conhecidos (com variações)
@@ -978,65 +964,102 @@ class BookAgentService:
         
         return None
 
-
-    def _is_book_conversation(self, message: str, language: str) -> bool:
-        """Verifica se a mensagem é sobre um livro específico"""
+    def _extract_user_profile(self, message: str, language: str) -> Dict:
+        """Extrai perfil do usuário da mensagem"""
+        profile = {
+            'interests': [],
+            'study_area': None,
+            'level': None,
+            'goals': [],
+            'preferences': []
+        }
+        
         message_lower = message.lower()
         
-        # Palavras-chave que indicam conversa sobre livro específico
-        book_conversation_keywords = {
-            'pt': [
-                'sobre o livro', 'deste livro', 'desse livro', 'livro específico',
-                'fale sobre', 'conte sobre', 'explique sobre', 'analise o livro',
-                'o que acha do livro', 'qual sua opinião sobre', 'me fale sobre',
-                'detalhes do livro', 'informações do livro', 'sinopse do',
-                'autor do livro', 'gênero do livro', 'avaliação do livro'
+        # Detectar se é sobre quadrinhos/personagens
+        comic_keywords = [
+            'homem-aranha', 'spider-man', 'marvel', 'dc comics', 'dc',
+            'super-herói', 'super hero', 'superhero', 'quadrinhos', 'comics', 'hq',
+            'batman', 'superman', 'x-men', 'avengers', 'thor', 'iron man', 'hulk'
+        ]
+        
+        if any(keyword in message_lower for keyword in comic_keywords):
+            profile['interests'].append('comics')
+            profile['interests'].append('superheroes')
+            profile['preferences'].append('action')
+            profile['preferences'].append('adventure')
+            return profile
+        
+        # Detectar áreas de estudo
+        study_areas = {
+            'computer science': [
+                'computer science', 'ciência da computação', 'ciencia da computacao',
+                'engenharia de software', 'software engineering'
             ],
-            'en': [
-                'about the book', 'about this book', 'specific book', 
-                'talk about', 'tell me about', 'explain about', 'analyze the book',
-                'what do you think about', 'your opinion on', 'details of the book',
-                'information about', 'synopsis of', 'author of the book',
-                'genre of the book', 'rating of the book'
+            'data science': [
+                'data science', 'ciência de dados', 'ciencia de dados',
+                'machine learning', 'aprendizado de máquina'
+            ],
+            'artificial intelligence': [
+                'artificial intelligence', 'inteligência artificial', 'inteligencia artificial',
+                'neural network', 'rede neural'
+            ],
+            'engineering': [
+                'engineering', 'engenharia', 
+                'engenharia civil', 'civil engineering',
+                'engenharia mecânica', 'mechanical engineering'
+            ],
+            'business': [
+                'business', 'negócios', 'negocios',
+                'administração', 'administracao', 'administration'
+            ],
+            'design': [
+                'design', 'ux design', 'ui design',
+                'user experience', 'user interface'
+            ],
+            'medicine': [
+                'medicina', 'medicine', 'médico', 'medico',
+                'saúde', 'saude', 'health'
             ]
         }
         
-        keywords = book_conversation_keywords.get(language, book_conversation_keywords['en'])
+        for area, keywords in study_areas.items():
+            keyword_matches = [keyword for keyword in keywords if keyword in message_lower]
+            
+            if keyword_matches:
+                if area == 'data science':
+                    exact_matches = ['data science', 'ciência de dados', 'ciencia de dados']
+                    if any(exact in message_lower for exact in exact_matches) or len(keyword_matches) >= 2:
+                        profile['study_area'] = area
+                        profile['interests'].append(area)
+                        break
+                else:
+                    profile['study_area'] = area
+                    profile['interests'].append(area)
+                    break
         
-        # Verificar se contém referência explícita a livro
-        for keyword in keywords:
-            if keyword in message_lower:
-                return True
+        # Detectar objetivos
+        if any(word in message_lower for word in ['learn', 'aprender', 'study', 'estudar', 'curso', 'course']):
+            profile['goals'].append('learning')
+        if any(word in message_lower for word in ['project', 'projeto', 'work', 'trabalho', 'aplicação', 'application']):
+            profile['goals'].append('project')
+        if any(word in message_lower for word in ['career', 'carreira', 'job', 'emprego', 'profissional', 'professional']):
+            profile['goals'].append('career')
         
-        # Verificar padrões específicos
-        patterns = self.book_conversation_service.book_reference_patterns.get(language, [])
-        for pattern in patterns:
-            if re.search(pattern, message_lower):
-                return True
+        # Detectar nível
+        if any(word in message_lower for word in ['beginner', 'iniciante', 'starting', 'básico', 'basic']):
+            profile['level'] = 'beginner'
+        elif any(word in message_lower for word in ['intermediate', 'intermediário', 'intermediario', 'experienced']):
+            profile['level'] = 'intermediate'
+        elif any(word in message_lower for word in ['advanced', 'avançado', 'avancado', 'expert', 'especialista']):
+            profile['level'] = 'advanced'
         
-        return False
+        return profile
 
-    def _build_search_query(self, message: str, user_profile: Dict) -> str:
-        """Constrói query de busca considerando perfil do usuário"""
-        query_parts = []
-        
-        # Adicionar termos da mensagem
-        query_parts.append(message)
-        
-        # Adicionar termos baseados no perfil
-        if user_profile.get('study_area'):
-            query_parts.append(user_profile['study_area'])
-        
-        if user_profile.get('level') == 'beginner':
-            query_parts.append("beginner introduction fundamentals")
-        elif user_profile.get('level') == 'advanced':
-            query_parts.append("advanced expert professional")
-        
-        if 'learning' in user_profile.get('goals', []):
-            query_parts.append("learning education tutorial guide")
-        
-        return ' '.join(query_parts)
-    
+    # ==============================================
+    # MÉTODOS RESTANTES (mantidos do código original)
+    # ==============================================
+
     def search_books(self, search_params: SearchRequest) -> List[Dict]:
         """Busca livros com cache"""
         if not self.initialized:
@@ -1063,36 +1086,74 @@ class BookAgentService:
         elif search_params.method == 'genre' and search_params.genre:
             books = self._cached_search(
                 method='genre',
-                query=search_params.genre,  # O gênero é a query aqui
-                filters=None,  # Busca por gênero não usa filtros adicionais
+                query=search_params.genre,
+                filters=None,
                 limit=search_params.limit
             )
         
         elif search_params.method == 'author' and search_params.author:
             books = self._cached_search(
                 method='author',
-                query=search_params.author,  # O autor é a query aqui
-                filters=None,  # Busca por autor não usa filtros adicionais
+                query=search_params.author,
+                filters=None,
                 limit=search_params.limit
             )
         
         elif search_params.method == 'popularity':
             books = self._cached_search(
                 method='popularity',
-                query='',  # Popularidade não tem query
+                query='',
                 filters=filters if filters else None,
                 limit=search_params.limit
             )
         else:
             books = []
         
-        # Log de cache (útil para debugging)
+        # Log de cache
         total_searches = self.cache_hits + self.cache_misses
         if total_searches > 0:
             hit_rate = (self.cache_hits / total_searches) * 100
             logger.debug(f"Cache stats: Hits={self.cache_hits}, Misses={self.cache_misses}, Rate={hit_rate:.1f}%")
         
         return self._format_books_for_response(books)
+    
+    def _cached_search(self, method: str, query: str, filters: Dict, limit: int):
+        """Busca com cache"""
+        cache_key = f"{method}:{query}:{str(filters)}:{limit}"
+        
+        # Verificar cache
+        if cache_key in self.search_cache:
+            cache_entry = self.search_cache[cache_key]
+            if datetime.now() - cache_entry['timestamp'] < self.cache_ttl:
+                self.cache_hits += 1
+                return cache_entry['results']
+        
+        self.cache_misses += 1
+        
+        # Executar busca
+        if method == 'semantic':
+            results = self.search_engine.search_by_semantic(query, filters, limit)
+        elif method == 'genre':
+            results = self.search_engine.search_by_genre(query, limit)
+        elif method == 'author':
+            results = self.search_engine.search_by_author(query, limit)
+        elif method == 'popularity':
+            results = self.search_engine.search_by_popularity(filters, limit)
+        else:
+            results = []
+        
+        # Armazenar no cache
+        self.search_cache[cache_key] = {
+            'timestamp': datetime.now(),
+            'results': results
+        }
+        
+        # Limitar tamanho do cache
+        if len(self.search_cache) > 100:
+            oldest_key = min(self.search_cache.keys(), key=lambda k: self.search_cache[k]['timestamp'])
+            del self.search_cache[oldest_key]
+        
+        return results
     
     def get_cache_stats(self) -> Dict:
         """Retorna estatísticas do cache"""
@@ -1102,7 +1163,7 @@ class BookAgentService:
             'cache_size': len(self.search_cache),
             'cache_hit_rate': (self.cache_hits / (self.cache_hits + self.cache_misses) * 100 
                              if (self.cache_hits + self.cache_misses) > 0 else 0),
-            'cache_entries': list(self.search_cache.keys())[:10]  # Primeiras 10 chaves
+            'cache_entries': list(self.search_cache.keys())[:10]
         }
     
     def clear_cache(self):
@@ -1132,106 +1193,6 @@ class BookAgentService:
             'description': book_result.description,
             'price': book_result.price
         }
-    
-    def _analyze_intent(self, message: str) -> str:
-        """Analisa a intenção da mensagem - VERSÃO CORRIGIDA"""
-        message_lower = message.lower().strip()
-        
-        logger.info(f"📝 Analisando intenção da mensagem: '{message_lower}'")
-        
-        # PRIMEIRO: Verificar se é sobre CARREIRA/LIDERANÇA (ALTA PRIORIDADE)
-        career_keywords = [
-            'promovido', 'promoção', 'carreira', 'liderança', 'líder', 'gestor', 'gerente',
-            'promoted', 'promotion', 'career', 'leadership', 'leader', 'manager'
-        ]
-        
-        if any(keyword in message_lower for keyword in career_keywords):
-            logger.info("🎯 Intenção: career_growth (palavras de carreira detectadas)")
-            return 'career_growth'
-        
-        # SEGUNDO: Verificar se menciona GÊNERO específico
-        genre_keywords = [
-            'fantasia', 'fantasy', 'ficção científica', 'sci-fi', 'science fiction',
-            'romance', 'terror', 'horror', 'mistério', 'mystery', 'suspense',
-            'história', 'history', 'biografia', 'biography', 'autoajuda', 'self-help',
-            'negócios', 'business', 'ciência', 'science', 'tecnologia', 'technology'
-        ]
-        
-        # Se menciona gênero E palavras de recomendação, é "general"
-        book_request_words = ['recomende', 'recomendação', 'sugestão', 'livro', 'livros',
-                            'recommend', 'recommendation', 'suggestion', 'book', 'books']
-        
-        has_genre = any(genre in message_lower for genre in genre_keywords)
-        has_book_request = any(word in message_lower for word in book_request_words)
-        
-        if has_genre and has_book_request:
-            logger.info("🎯 Intenção: general (gênero + pedido de livro detectado)")
-            return 'general'
-        
-        # TERCEIRO: Verificar se menciona AUTOR específico
-        author_keywords = [
-            'autor', 'autora', 'writer', 'author', 'escritor', 'escritora',
-            'livros de', 'obras de', 'books by'
-        ]
-        
-        # Verificar autores conhecidos
-        known_authors = [
-            'j.k. rowling', 'jk rowling', 'stephen king', 'george orwell',
-            'agatha christie', 'j.r.r. tolkien', 'dan brown', 'paulo coelho',
-            'suzanne collins', 'veronica roth', 'rick riordan'
-        ]
-        
-        has_author_keyword = any(keyword in message_lower for keyword in author_keywords)
-        has_known_author = any(author in message_lower for author in known_authors)
-        
-        if has_author_keyword or has_known_author:
-            logger.info("🎯 Intenção: author (autor detectado)")
-            return 'author'
-        
-        # QUARTO: Se tem palavras de pedido de livros, é general
-        if has_book_request:
-            logger.info("🎯 Intenção: general (solicitação de livros detectada)")
-            return 'general'
-        
-        # QUINTO: Verificar closing (agradecimento/despedida)
-        closing_keywords = [
-            'obrigado', 'obrigada', 'valeu', 'thank you', 'thanks', 'bye', 'tchau',
-            'até logo', 'goodbye', 'adeus'
-        ]
-        
-        # Só é closing se NÃO tem palavras de pedido
-        is_closing = any(keyword in message_lower for keyword in closing_keywords)
-        if is_closing and not has_book_request:
-            logger.info("🎯 Intenção: closing (agradecimento/despedida)")
-            return 'closing'
-        
-        # SEXTO: Padrão
-        logger.info("🎯 Intenção: social (padrão)")
-        return 'social'
-
-    
-    def _format_books_for_response(self, books: List) -> List[Dict]:
-        """Formata livros para resposta da API"""
-        formatted = []
-        
-        for book in books:
-            if hasattr(book, 'book_id'):  # É um BookResult
-                formatted.append({
-                    'book_id': book.book_id,
-                    'title': book.title,
-                    'authors': book.authors,
-                    'genres': book.genres,
-                    'rating': book.rating,
-                    'num_ratings': book.num_ratings,
-                    'description': book.description,
-                    'price': book.price,
-                    'similarity_score': getattr(book, 'similarity_score', None),
-                    'search_method': getattr(book, 'search_method', None)
-                })
-            elif isinstance(book, dict):  # Já é um dicionário
-                formatted.append(book)
-        
-        return formatted
     
     def get_agent_stats(self) -> Dict:
         """Obtém estatísticas do agente"""
@@ -1294,7 +1255,6 @@ class BookAgentService:
             return False
         
         try:
-            # Verificação assíncrona
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             connected = loop.run_until_complete(self.ollama_service.health_check())
@@ -1302,14 +1262,12 @@ class BookAgentService:
             return connected
         except:
             return False
-        
     
     def clear_session_data(self, session_id: str) -> Dict[str, any]:
         """Limpa os dados de uma sessão específica"""
         logger.info(f"🧹 Solicitada limpeza da sessão: {session_id}")
         
         try:
-            # Verificar se temos gerenciador de conversação
             if not hasattr(self, 'book_conversation_service') or not self.book_conversation_service:
                 logger.warning("❌ Serviço de conversação não disponível")
                 return {
@@ -1318,14 +1276,7 @@ class BookAgentService:
                     "session_id": session_id
                 }
             
-            # Usar o ConversationContextManager para limpar
             result = self.book_conversation_service.context_manager.clear_session_data(session_id)
-            
-            # Também limpar cache local se existir
-            if hasattr(self, 'search_engine') and self.search_engine:
-                # Limpar cache de busca se existir
-                if hasattr(self.search_engine, 'clear_session_cache'):
-                    self.search_engine.clear_session_cache(session_id)
             
             logger.info(f"✅ Resultado da limpeza: {result}")
             return result
@@ -1339,11 +1290,10 @@ class BookAgentService:
             }
 
     def clear_all_sessions(self) -> Dict[str, any]:
-        """Limpa todas as sessões (CUIDADO: função perigosa)"""
+        """Limpa todas as sessões"""
         logger.warning("⚠️  Solicitada limpeza de TODAS as sessões")
         
         try:
-            # Verificar se temos gerenciador de conversação
             if not hasattr(self, 'book_conversation_service') or not self.book_conversation_service:
                 logger.warning("❌ Serviço de conversação não disponível")
                 return {
@@ -1351,10 +1301,8 @@ class BookAgentService:
                     "error": "Serviço de conversação não disponível"
                 }
             
-            # Solicitar confirmação adicional para operação perigosa
             result = self.book_conversation_service.context_manager.clear_all_sessions()
             
-            # Limpar cache local também
             if hasattr(self, 'search_cache'):
                 self.search_cache.clear()
                 logger.info("🧹 Cache local limpo")
@@ -1369,114 +1317,8 @@ class BookAgentService:
                 "error": str(e)
             }   
         
-    def _extract_user_profile(self, message: str, language: str) -> Dict:
-        """Extrai perfil do usuário da mensagem - VERSÃO CORRIGIDA"""
-        profile = {
-            'interests': [],
-            'study_area': None,
-            'level': None,
-            'goals': [],
-            'preferences': []
-        }
-        
-        message_lower = message.lower()
-        
-        # **PRIMEIRO: Detectar se é sobre quadrinhos/personagens**
-        comic_keywords = [
-            'homem-aranha', 'spider-man', 'marvel', 'dc comics', 'dc',
-            'super-herói', 'super hero', 'superhero', 'quadrinhos', 'comics', 'hq',
-            'batman', 'superman', 'x-men', 'avengers', 'thor', 'iron man', 'hulk'
-        ]
-        
-        if any(keyword in message_lower for keyword in comic_keywords):
-            profile['interests'].append('comics')
-            profile['interests'].append('superheroes')
-            profile['preferences'].append('action')
-            profile['preferences'].append('adventure')
-            # Se é sobre quadrinhos, NÃO procurar outras áreas
-            return profile
-        
-        # **SÓ SE NÃO FOR SOBRE QUADRINHOS: detectar áreas de estudo**
-        study_areas = {
-            'computer science': [
-                'computer science', 'ciência da computação', 'ciencia da computacao',
-                'engenharia de software', 'software engineering'
-            ],
-            'data science': [
-                'data science', 'ciência de dados', 'ciencia de dados',
-                'machine learning', 'aprendizado de máquina'
-            ],
-            'artificial intelligence': [
-                'artificial intelligence', 'inteligência artificial', 'inteligencia artificial',
-                'neural network', 'rede neural'
-            ],
-            'engineering': [
-                'engineering', 'engenharia', 
-                'engenharia civil', 'civil engineering',
-                'engenharia mecânica', 'mechanical engineering'
-            ],
-            'business': [
-                'business', 'negócios', 'negocios',
-                'administração', 'administracao', 'administration'
-            ],
-            'design': [
-                'design', 'ux design', 'ui design',
-                'user experience', 'user interface'
-            ],
-            'medicine': [
-                'medicina', 'medicine', 'médico', 'medico',
-                'saúde', 'saude', 'health'
-            ]
-        }
-        
-        for area, keywords in study_areas.items():
-            # Exigir correspondência EXATA ou múltiplas palavras
-            keyword_matches = [keyword for keyword in keywords if keyword in message_lower]
-            
-            if keyword_matches:
-                # Para evitar falsos positivos, verificar contexto
-                if area == 'data science':
-                    # Data science requer termos mais específicos
-                    exact_matches = ['data science', 'ciência de dados', 'ciencia de dados']
-                    if any(exact in message_lower for exact in exact_matches) or len(keyword_matches) >= 2:
-                        profile['study_area'] = area
-                        profile['interests'].append(area)
-                        break
-                else:
-                    profile['study_area'] = area
-                    profile['interests'].append(area)
-                    break
-        
-        # Detectar objetivos
-        if any(word in message_lower for word in ['learn', 'aprender', 'study', 'estudar', 'curso', 'course']):
-            profile['goals'].append('learning')
-        if any(word in message_lower for word in ['project', 'projeto', 'work', 'trabalho', 'aplicação', 'application']):
-            profile['goals'].append('project')
-        if any(word in message_lower for word in ['career', 'carreira', 'job', 'emprego', 'profissional', 'professional']):
-            profile['goals'].append('career')
-        
-        # Detectar nível
-        if any(word in message_lower for word in ['beginner', 'iniciante', 'starting', 'básico', 'basic']):
-            profile['level'] = 'beginner'
-        elif any(word in message_lower for word in ['intermediate', 'intermediário', 'intermediario', 'experienced']):
-            profile['level'] = 'intermediate'
-        elif any(word in message_lower for word in ['advanced', 'avançado', 'avancado', 'expert', 'especialista']):
-            profile['level'] = 'advanced'
-        
-        return profile
-
     async def translate_query(self, query: str, source_lang: str = 'pt', target_lang: str = 'en') -> str:
-        """
-        Traduz uma query para o idioma de destino
-        
-        Args:
-            query: Texto para traduzir
-            source_lang: Idioma de origem
-            target_lang: Idioma de destino
-            
-        Returns:
-            Texto traduzido
-        """
+        """Traduz uma query para o idioma de destino"""
         if not self.translation_service:
             self.translation_service = get_translation_service()
         
