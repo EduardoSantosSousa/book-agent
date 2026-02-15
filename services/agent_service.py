@@ -416,7 +416,7 @@ class BookAgentService:
                 unique_results.sort(key=lambda x: x.similarity_score, reverse=True)
             
             logger.info(f"📚 Resultados combinados: {len(unique_results)} livros")
-            return unique_results[:10]
+            return unique_results[:15]
             
         except Exception as e:
             logger.error(f"❌ Erro na busca inteligente: {e}")
@@ -442,7 +442,7 @@ class BookAgentService:
         # Se está pedindo detalhes E tem livros anteriores
         if asking_for_details and last_recommendations:
             # Verificar se menciona algum título específico
-            for book in last_recommendations[:10]:  # Verificar últimos 5 livros
+            for book in last_recommendations[:15]:  # Verificar últimos 5 livros
                 title = book.get('title', '').lower()
                 if title and title in message_lower:
                     logger.info(f"📚 Pergunta sobre livro específico detectada: '{title[:50]}...'")
@@ -553,6 +553,25 @@ class BookAgentService:
                 logger.info(f"   📝 Mensagens: {len(conversation_history)}")
                 logger.info(f"   📚 Últimas recomendações: {len(last_recommendations)} livros")
 
+                # 🔥 DEBUG: Mostrar livros salvos no Redis
+                logger.info("=" * 80)
+                logger.info("🔍 DEBUG - LIVROS NO HISTÓRICO REDIS:")
+                logger.info(f"Sessão: {session_id}")
+                logger.info(f"Total de mensagens: {len(conversation_history)}")
+                
+                for i, msg in enumerate(conversation_history):
+                    if msg.get('role') == 'assistant' and msg.get('books'):
+                        logger.info(f"  Mensagem {i+1} - {len(msg['books'])} livros:")
+                        for j, book in enumerate(msg['books'][:15]):  # Mostra só os 5 primeiros para não poluir
+                            title = book.get('title', 'Sem título')[:50]
+                            logger.info(f"    {j+1}. {title}...")
+                
+                logger.info(f"📚 Últimas recomendações: {len(last_recommendations)} livros")
+                for i, book in enumerate(last_recommendations[:15]):
+                    title = book.get('title', 'Sem título')[:50]
+                    logger.info(f"  {i+1}. {title}...")
+                logger.info("=" * 80)
+
             # ==============================================
             # 2. ANALISAR INTENÇÃO
             # ==============================================
@@ -617,12 +636,12 @@ class BookAgentService:
                 logger.info(f"✍️  Autor extraído: {author}")
                 
                 if author:
-                    books = self.search_engine.search_by_author(author, limit=10)
+                    books = self.search_engine.search_by_author(author, limit=15)
                     logger.info(f"📚 Livros encontrados para autor '{author}': {len(books)}")
                 else:
                     user_profile = self._extract_user_profile(message, language)
                     search_query = self._build_search_query(message, user_profile)
-                    books = self.search_engine.search_by_semantic(search_query, k=10)
+                    books = self.search_engine.search_by_semantic(search_query, k=15)
                 
                 # Converter BookResult para dicionários antes de passar para response_generator
                 books_dicts = self._convert_book_results_to_dicts(books)
@@ -731,13 +750,35 @@ class BookAgentService:
                     
                 elif search_strategy == "use_previous_only":
                     logger.info("💾 Usando apenas livros já recomendados")
+
+                    # 🔥 DEBUG: Mostrar o que estamos buscando
+                    logger.info(f"🔍 Buscando livro: '{message}'")
                     
+                    # 🔥 Buscar TODOS os livros do histórico, não só os últimos
                     previous_books = []
-                    for book_dict in last_recommendations:
-                        book_result = self._book_dict_to_result(book_dict)
-                        previous_books.append(book_result)
                     
-                    books = previous_books[:8]
+                    # Pega TODOS os livros das últimas mensagens
+                    for msg in reversed(conversation_history[-3:]):  # Últimas 3 mensagens
+                        if msg.get('role') == 'assistant' and msg.get('books'):
+                            for book_dict in msg.get('books', [])[:15]:  # Pega até 15 livros
+                                try:
+                                    book_result = self._book_dict_to_result(book_dict)
+                                    if book_result not in previous_books:  # Evita duplicatas
+                                        previous_books.append(book_result)
+                                except Exception as e:
+                                    logger.error(f"Erro ao converter livro: {e}")
+                    
+                    books = previous_books[:15]  # Limita a 15 livros para não estourar contexto
+                    logger.info(f"📚 Recuperados {len(books)} livros do histórico")
+
+                    # 🔥 DEBUG: Listar títulos recuperados
+                    logger.info("📋 TÍTULOS NO HISTÓRICO:")
+                    for i, book in enumerate(books[:15]):
+                        if isinstance(book, dict):
+                            title = book.get('title', 'Sem título')
+                        else:
+                            title = getattr(book, 'title', 'Sem título')
+                        logger.info(f"  {i+1}. {title}")
                 
                 else:
                     logger.info("⚡ Fallback: busca normal")
@@ -756,7 +797,7 @@ class BookAgentService:
                 books = [self._book_dict_to_result(book) for book in last_recommendations[:3]]
             
             # Converter BookResult para dicionários antes de passar para response_generator
-            books_dicts = self._convert_book_results_to_dicts(books[:5])
+            books_dicts = self._convert_book_results_to_dicts(books[:15])
             
             # Gerar resposta PERSONALIZADA COM HISTÓRICO
             response_text = await self.response_generator.generate_personalized_recommendation(
@@ -778,14 +819,14 @@ class BookAgentService:
                 )
                 
                 # Salvar resposta do assistente COM LIVROS (dicionários)
-                response_books = self._convert_book_results_to_dicts(books[:10])
+                all_books = self._convert_book_results_to_dicts(books[:15])
                 self.book_conversation_service.context_manager.add_message(
                     session_id, 'assistant', response_text, 
-                    books=response_books, 
+                    books=all_books,
                     intent=intent
                 )
                 
-                logger.info(f"💾 Salvo no Redis - Total mensagens: {len(conversation_history) + 2}")
+                logger.info(f"💾 Salvo no Redis - {len(all_books)} livros no histórico")
             
             # ==============================================
             # 6. PREPARAR RESPOSTA FINAL
@@ -1215,7 +1256,7 @@ class BookAgentService:
             'cache_size': len(self.search_cache),
             'cache_hit_rate': (self.cache_hits / (self.cache_hits + self.cache_misses) * 100 
                              if (self.cache_hits + self.cache_misses) > 0 else 0),
-            'cache_entries': list(self.search_cache.keys())[:10]
+            'cache_entries': list(self.search_cache.keys())[:15]
         }
     
     def clear_cache(self):

@@ -4,19 +4,20 @@ from typing import List, Dict
 from groq import Groq
 
 class GroqService:
-    def __init__(self, model: str, api_key: str, timeout: int = 60):
+    def __init__(self, model: str, api_key: str, timeout: int = 60,):
         self.model = model
         self.client = Groq(api_key=api_key)
         self.timeout = timeout
         self.response_times = []
 
-    async def chat(self, messages: List[Dict[str, str]]) -> str:
+    async def chat(self, messages: List[Dict[str, str]], max_tokens: int = 8000) -> str:
         start = time.time()
 
         def _call():
             resp = self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
+                max_tokens=max_tokens
             )
             return resp.choices[0].message.content
 

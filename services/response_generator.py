@@ -2,7 +2,7 @@
 
 import logging
 import random
-from typing import List, Dict
+from typing import List, Dict, Optional
 from .ollama_service import OllamaService
 from .search_engine import BookResult
 
@@ -62,6 +62,83 @@ class ResponseGenerator:
             }
         }
 
+    def _create_books_list_for_prompt(self, books: List) -> tuple:
+        """Cria lista de títulos e detalhes dos livros para o prompt
+        Aceita tanto objetos BookResult quanto dicionários"""
+        
+        titles_list = []
+        books_details = []
+        
+        for i, book in enumerate(books, 1):
+            # Verificar se é dicionário ou objeto
+            if isinstance(book, dict):
+                # É dicionário
+                title = book.get('title', 'Título desconhecido')
+                authors = book.get('authors', ['Unknown'])
+                rating = book.get('rating', 0)
+                description = book.get('description', '')
+            else:
+                # É objeto BookResult
+                title = getattr(book, 'title', 'Título desconhecido')
+                authors = getattr(book, 'authors', ['Unknown'])
+                rating = getattr(book, 'rating', 0)
+                description = getattr(book, 'description', '')
+            
+            # Formatar autores
+            if isinstance(authors, list):
+                authors_str = ', '.join(authors[:2]) if authors else 'Unknown'
+            else:
+                authors_str = str(authors)
+            
+            # Limitar descrição
+            if description and len(description) > 300:
+                description = description[:300] + '...'
+            
+            # Adicionar à lista de títulos
+            titles_list.append(f"- {title}")
+            
+            # Criar detalhes do livro
+            book_detail = f"""
+    BOOK {i}:
+    📚 TITLE: {title}
+    ✍️ AUTHOR(S): : {authors_str}
+    ⭐ RATING: {rating:.1f}/5.0
+    📖 DESCRIPTION: {description if description else 'No description available'}
+    ---"""
+            books_details.append(book_detail)
+        
+        return "\n".join(titles_list), "\n".join(books_details)
+    
+
+    def _find_book_by_title(self, books: List, requested_title: str) -> Optional[Dict]:
+        """Busca um livro pelo título na lista (case insensitive)"""
+        requested_lower = requested_title.lower().strip()
+        
+        # 🔥 DEBUG
+        logger.info(f"🔍 Buscando título exato: '{requested_title}'")
+        logger.info(f"📋 Analisando {len(books)} livros:")
+        
+        for i, book in enumerate(books):
+            if isinstance(book, dict):
+                title = book.get('title', '').lower()
+                current_title = book.get('title', 'Sem título')
+            else:
+                title = getattr(book, 'title', '').lower()
+                current_title = getattr(book, 'title', 'Sem título')
+            
+            # Mostrar cada livro analisado (só os primeiros 10 para não poluir)
+            if i < 10:
+                logger.info(f"  {i+1}. '{current_title}'")
+            
+            # Busca exata ou parcial
+            if requested_lower == title or requested_lower in title or title in requested_lower:
+                logger.info(f"✅ ENCONTRADO! Match com: '{current_title}'")
+                return book
+        
+        logger.warning(f"❌ Livro '{requested_title}' NÃO encontrado na lista")
+        return None
+    
+
     async def generate(self, user_message: str, books: List, conversation_context: List = None, language: str = "pt"):
         """
         Método simplificado para gerar resposta
@@ -74,11 +151,45 @@ class ResponseGenerator:
         )    
 
     async def generate_personalized_recommendation(self, user_message: str,
-                                                   books: List[BookResult],
-                                                   intent: str = 'book_recommendation',
-                                                   language: str = 'pt',
-                                                   conversation_history: List = None) -> str:
+                                                books: List[BookResult],
+                                                intent: str = 'book_recommendation',
+                                                language: str = 'pt',
+                                                conversation_history: List = None) -> str:
         """Gera recomendações personalizadas COM HISTÓRICO"""
+        
+        # 🔥 DEBUG 1 - Versão que funciona com dict OU objeto
+        logger.info("=" * 80)
+        logger.info("🔍 DEBUG 1 - LIVROS RECEBIDOS:")
+        logger.info(f"Total de livros: {len(books)}")
+        logger.info(f"Tipo do primeiro livro: {type(books[0]) if books else 'Nenhum'}")
+        
+        # Se for pergunta sobre Batman: Noël
+        if "batman: noël" in user_message.lower() or "batman: noel" in user_message.lower():
+            logger.info("🎯 PERGUNTA SOBRE BATMAN: NOËL DETECTADA!")
+            found = False
+            for i, book in enumerate(books):
+                # 🔥 FUNÇÃO SEGURA para pegar título
+                if hasattr(book, 'title'):  # É um objeto
+                    title = book.title
+                elif isinstance(book, dict):  # É um dicionário
+                    title = book.get('title', 'Sem título')
+                else:
+                    title = str(book)
+                
+                logger.info(f"  Livro {i+1}: {title}")
+                
+                if "noël" in title.lower() or "noel" in title.lower():
+                    logger.info(f"  ✅ ENCONTRADO! Posição {i+1}")
+                    if hasattr(book, 'description'):
+                        desc = book.description[:100]
+                    elif isinstance(book, dict):
+                        desc = book.get('description', '')[:100]
+                    else:
+                        desc = ''
+                    logger.info(f"     Descrição: {desc}...")
+                    found = True
+            if not found:
+                logger.warning("❌ Batman: Noël NÃO encontrado na lista!")
         
         # Inicializar histórico se None
         if conversation_history is None:
@@ -99,8 +210,19 @@ class ResponseGenerator:
             return random.choice(self.response_templates[language]['no_results'])
         
         # Limitar livros para evitar contexto muito longo
-        if len(books) > 4:
-            books = books[:4]
+        if len(books) > 10:
+            books = books[:10]
+        
+        # 🔥 DEBUG 2 - Versão segura
+        logger.info("🔍 DEBUG 2 - APÓS LIMITE DE 10 LIVROS:")
+        for i, book in enumerate(books):
+            if hasattr(book, 'title'):
+                title = book.title
+            elif isinstance(book, dict):
+                title = book.get('title', 'Sem título')
+            else:
+                title = str(book)
+            logger.info(f"  {i+1}. {title}")
         
         # Extrair contexto do usuário
         user_context = self._extract_user_context(user_message, language)
@@ -108,123 +230,310 @@ class ResponseGenerator:
         # Criar contexto detalhado dos livros
         books_context = self._create_detailed_book_context(books, "", language)
         
+        # 🔥 DEBUG 3
+        logger.info(f"🔍 DEBUG 3 - TAMANHO DO CONTEXTO:")
+        logger.info(f"  books_context: {len(books_context)} caracteres")
+        
         # CONSTRUIR HISTÓRICO DE CONVERSA para o Ollama
         messages = []
         
         # 1. Adicionar instruções do sistema com contexto atual
         system_message = self._create_system_message(
-            user_message, books_context, user_context, language
+            user_message, books_context, user_context, language, books=books
         )
+        
+        # 🔥 DEBUG 4
+        logger.info("🔍 DEBUG 4 - SYSTEM MESSAGE (primeiros 500 chars):")
+        logger.info(system_message[:500] + "...")
+        logger.info(f"  Tamanho total: {len(system_message)} caracteres")
+        
         messages.append({"role": "system", "content": system_message})
         
-        # 2. Adicionar histórico se disponível (máximo 6 mensagens)
+        # 2. Adicionar histórico se disponível
         if conversation_history:
-            conversation_history = conversation_history[-2:]  # APENAS últimas 2 mensagens
+            conversation_history = conversation_history[-2:]
             logger.info(f"📚 Usando {len(conversation_history)} mensagens de histórico")
             
-            # Filtrar apenas as últimas N mensagens para caber no contexto
-            for msg in conversation_history[-2:]:  # Últimas 6 mensagens
+            for i, msg in enumerate(conversation_history[-2:]):
+                content = msg.get("content", "")[:400]
+                logger.info(f"  Histórico {i+1}: {content[:100]}...")
                 messages.append({
                     "role": msg.get("role", "user"),
-                    "content": msg.get("content", "")[:400]  # Limitar tamanho
+                    "content": content
                 })
         
-        # 3. Adicionar mensagem atual do usuário
-        messages.append({"role": "user", "content": user_message})
+        # 3. Para perguntas sobre livro específico
+        if any(phrase in user_message.lower() for phrase in ['more details about', 'know more about', 'tell me about', 'sobre o livro']):
+            import re
+            title_match = re.search(r"book: ['\"](.+?)['\"]", user_message)
+            if title_match:
+                requested_title = title_match.group(1)
+                
+                # 🔥 DEBUG 5 - Busca segura
+                logger.info(f"🔍 DEBUG 5 - BUSCANDO LIVRO: '{requested_title}'")
+                book_found = None
+                for book in books:
+                    # Pega título de forma segura
+                    if hasattr(book, 'title'):
+                        current_title = book.title
+                    elif isinstance(book, dict):
+                        current_title = book.get('title', '')
+                    else:
+                        current_title = str(book)
+                    
+                    if requested_title.lower() in current_title.lower() or current_title.lower() in requested_title.lower():
+                        book_found = book
+                        logger.info(f"  ✅ ENCONTRADO DIRETAMENTE: {current_title}")
+                        break
+                
+                if book_found:
+                    logger.info("🔍 DEBUG 6 - RESPONDENDO VIA LLM (MAS SÓ PARA ESTE LIVRO)")
+                    
+                    # Extrair dados de forma segura
+                    if hasattr(book_found, 'title'):
+                        title = book_found.title
+                        authors = ', '.join(book_found.authors) if book_found.authors else 'Unknown'
+                        description = book_found.description
+                        rating = book_found.rating
+                    else:
+                        title = book_found.get('title', 'Unknown')
+                        authors = ', '.join(book_found.get('authors', ['Unknown']))
+                        description = book_found.get('description', 'No description')
+                        rating = book_found.get('rating', 0)
+                    
+                    # 🔥 CORREÇÃO: Usar as variáveis diretamente, NÃO usar {book_info}
+                    if language == 'pt':
+                        system_prompt = f"""Você é um especialista em livros entusiasmado e amigável chamado BookAgent.
+O usuário está pedindo mais detalhes sobre um livro específico.
+Aqui estão as informações do livro:
+
+Título: {title}
+Autor(es): {authors}
+Avaliação: {rating}/5.0
+Descrição: {description}
+
+Por favor, forneça uma resposta calorosa e envolvente que:
+1. Mostre entusiasmo pelo livro
+2. Destaque o que o torna especial
+3. Dê uma ideia da história sem spoilers
+4. Termine com um convite para explorar mais livros
+
+Mantenha a conversa natural, como se estivesse conversando com um amigo em uma livraria.
+
+REGRAS IMPORTANTES:
+- Use uma linguagem calorosa e amigável
+- Seja específico sobre por que este livro é interessante
+- Não invente informações que não estão na descrição
+- Termine perguntando se o usuário quer saber sobre outros livros"""
+                    else:
+                        system_prompt = f"""You are a friendly and enthusiastic book expert called BookAgent.
+The user is asking for more details about a specific book.
+Here's the information about the book:
+
+Title: {title}
+Author(s): {authors}
+Rating: {rating}/5.0
+Description: {description}
+
+Please provide a warm, engaging response that:
+1. Shows enthusiasm about the book
+2. Highlights what makes it special
+3. Gives a taste of the story without spoilers
+4. Ends with an invitation to explore more books
+
+Keep it conversational and natural, like you're talking to a friend in a bookstore.
+
+IMPORTANT RULES:
+- Use warm and friendly language
+- Be specific about why this book is interesting
+- Don't invent information not in the description
+- End by asking if they want to know about other books"""
+                    
+                    # Mensagem do usuário no idioma apropriado
+                    user_message_content = f"Tell me more about '{title}'" if language != 'pt' else f"Me conte mais sobre '{title}'"
+                    
+                    # 🔥 CRIAR NOVAS MENSAGENS APENAS PARA ESTE LIVRO
+                    detail_messages = [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_message_content}
+                    ]
+                    
+                    try:
+                        response = await self.ollama_service.chat(detail_messages)
+                        return response.strip()
+                    except Exception as e:
+                        logger.error(f"Erro ao gerar resposta detalhada: {e}")
+                        # Fallback para resposta simples no idioma correto
+                        if language == 'pt':
+                            return f"""Aqui estão os detalhes de '{title}':
+
+**Título:** {title}
+**Autor(es):** {authors}
+**Avaliação:** {rating:.1f}/5.0
+
+**Descrição:**
+{description}
+
+Gostaria de saber mais sobre algum outro livro?"""
+                        else:
+                            return f"""Here are the details for '{title}':
+
+**Title:** {title}
+**Author(s):** {authors}
+**Rating:** {rating:.1f}/5.0
+
+**Description:**
+{description}
+
+Would you like to know more about any other book?"""
+                else:
+                    logger.warning(f"❌ Livro '{requested_title}' NÃO encontrado na lista")
+                    messages.append({
+                        "role": "user",
+                        "content": f"The user asked about the book '{requested_title}'. Please check if it's in the list above and provide details if available. If not, explain it's not available."
+                    })
+            else:
+                messages.append({"role": "user", "content": user_message})
+        else:
+            messages.append({"role": "user", "content": user_message})
+        
+        # 🔥 DEBUG 7
+        logger.info("🔍 DEBUG 7 - MENSAGEM FINAL PARA O LLM:")
+        logger.info(f"  Total de mensagens: {len(messages)}")
+        total_chars = sum(len(m.get('content', '')) for m in messages)
+        logger.info(f"  Total de caracteres: {total_chars}")
         
         try:
             response = await self.ollama_service.chat(messages)
+            
+            # 🔥 DEBUG 8
+            logger.info("🔍 DEBUG 8 - RESPOSTA DO LLM:")
+            logger.info(f"  {response[:200]}...")
+            
             return response.strip()
             
         except Exception as e:
             logger.error(f"Erro gerando recomendação personalizada: {e}")
             return self._generate_fallback_recommendation(user_message, books, language)
+
     
     def _create_system_message(self, user_message: str, books_context: str, 
-                              user_context: str, language: str) -> str:
+                            user_context: Dict, language: str, 
+                            books: List[BookResult] = None) -> str:
         """Cria mensagem do sistema com contexto"""
+
+        # Inicializar as variáveis com valores padrão
+        titles_list = "No books available"
+        books_details = "No books available"
+        
+        # Se temos a lista de livros, criar uma versão mais estruturada
+        if books:
+            titles_list, books_details = self._create_books_list_for_prompt(books)
+
+            # 🔥 DEBUG: Mostrar os títulos que estão indo para o LLM
+            logger.info("=" * 80)
+            logger.info("📋 TÍTULOS ENVIADOS PARA O LLM:")
+            logger.info(titles_list)
+            logger.info("=" * 80)
+
         if language == 'pt':
             return f"""
-            VOCÊ É: Um assistente de recomendações de livros empático e compreensivo. Você se importa genuinamente com o bem-estar das pessoas.
-            
-            CONTEXTO DO USUÁRIO:
-            {user_context}
-            
-            LIVROS DISPONÍVEIS (APENAS ESTES PODEM SER RECOMENDADOS):
-            {books_context}
-            
-            REGRAS IMPORTANTES:
-            1. Recomende APENAS livros da lista acima
-            2. RECOMENDE MÚLTIPLOS livros (2-3) que sejam mais relevantes para o interesse do usuário
-            3. Use o histórico da conversa para manter continuidade
-            4. Seja específico sobre POR QUE cada livro é relevante
-            5. Relacione com a conversa anterior quando aplicável
-            6. Se o usuário perguntar sobre livros já mencionados, foque neles
-            7. Não invente livros que não estão na lista
-            8. Não sugira livros que não foram fornecidos
-            
-            SUA RESPOSTA DEVE:
-            - Ser natural e conversacional
-            - Manter o contexto da conversa
-            - Referenciar livros anteriores se relevante
-            - Explicar por que cada recomendação é boa para o usuário
-            - Mostrar empatia pela situação do usuário
-            - Ser acolhedor e compreensivo
-            
-            EXEMPLOS DO QUE NÃO FAZER:
-            - "Recomendo o livro X" (se X não está na lista) ❌
-            - "Existe um livro chamado Y" (se Y não está na lista) ❌
-            
-            EXEMPLOS DO QUE FAZER:
-            - "Baseado nos livros disponíveis, recomendo: [título da lista]..." ✅
-            - "Dos livros que temos, o mais relevante é: [título da lista]..." ✅
-            
-            REGRA IMPORTANTE:
-            Não assuma interesses técnicos (como programação, ciência de dados,
-            machine learning ou IA) a menos que o usuário mencione explicitamente
-            esses temas na mensagem.
-            """
+    VOCÊ É: Um assistente de recomendações de livros empático e compreensivo. Você se importa genuinamente com o bem-estar das pessoas.
+
+    CONTEXTO DO USUÁRIO:
+    {user_context}
+
+    LIVROS DISPONÍVEIS (APENAS ESTES PODEM SER RECOMENDADOS):
+    {books_context}
+
+    📚 LISTA COMPLETA DE LIVROS DISPONÍVEIS:
+    {titles_list}
+
+    📖 DETALHES DOS LIVROS:
+    {books_details}
+
+    REGRAS IMPORTANTES:
+    1. Recomende APENAS livros da lista acima
+    2. RECOMENDE MÚLTIPLOS livros (2-3) que sejam mais relevantes para o interesse do usuário
+    3. Use o histórico da conversa para manter continuidade
+    4. Seja específico sobre POR QUE cada livro é relevante
+    5. Relacione com a conversa anterior quando aplicável
+    6. Se o usuário perguntar sobre livros já mencionados, foque neles
+    7. Não invente livros que não estão na lista
+    8. Não sugira livros que não foram fornecidos
+
+    SUA RESPOSTA DEVE:
+    - Ser natural e conversacional
+    - Manter o contexto da conversa
+    - Referenciar livros anteriores se relevante
+    - Explicar por que cada recomendação é boa para o usuário
+    - Mostrar empatia pela situação do usuário
+    - Ser acolhedor e compreensivo
+
+    EXEMPLOS DO QUE NÃO FAZER:
+    - "Recomendo o livro X" (se X não está na lista) ❌
+    - "Existe um livro chamado Y" (se Y não está na lista) ❌
+
+    EXEMPLOS DO QUE FAZER:
+    - "Baseado nos livros disponíveis, recomendo: [título da lista]..." ✅
+    - "Dos livros que temos, o mais relevante é: [título da lista]..." ✅
+
+    REGRAS IMPORTANTES:
+    - Não assuma interesses técnicos (como programação, ciência de dados, machine learning ou IA) a menos que o usuário mencione explicitamente esses temas na mensagem.
+    - Se o usuário perguntar sobre um livro ESPECÍFICO, verifique se ele está na LISTA DE TÍTULOS acima e use os DETALHES para responder.
+    - NUNCA invente livros que não estão na lista.
+
+    Mensagem do usuário: "{user_message}"
+    """
         else:
             return f"""
-            YOU ARE: An empathetic and understanding book recommendation assistant. You genuinely care about people's well-being.
-            
-            USER CONTEXT:
-            {user_context}
-            
-            AVAILABLE BOOKS (ONLY THESE CAN BE RECOMMENDED):
-            {books_context}
-            
-            IMPORTANT RULES:
-            1. Recommend ONLY books from the list above
-            2.RECOMMEND MULTIPLE books (2-3) that are most relevant to the user's interest
-            3. Use conversation history to maintain continuity
-            4. Be specific about WHY each book is relevant
-            5. Relate to previous conversation when applicable
-            6. If user asks about previously mentioned books, focus on them
-            7. Do not invent books that are not in the list
-            8. Do not suggest books that were not provided
-            
-            YOUR RESPONSE SHOULD:
-            - Be natural and conversational
-            - Maintain conversation context
-            - Reference previous books if relevant
-            - Explain why each recommendation is good for the user
-            - Show empathy for the user's situation
-            - Be welcoming and understanding
-            
-            EXAMPLES OF WHAT NOT TO DO:
-            - "I recommend book X" (if X is not in the list) ❌
-            - "There's a book called Y" (if Y is not in the list) ❌
-            
-            EXAMPLES OF WHAT TO DO:
-            - "Based on the available books, I recommend: [list title]..." ✅
-            - "From the books we have, the most relevant is: [list title]..." ✅
-            
-            IMPORTANT RULE:
-            Do not assume technical interests (such as programming, data science,
-            machine learning, or AI) unless the user explicitly mentions
-            these topics in their message.
-            """
+    YOU ARE: An empathetic and understanding book recommendation assistant. You genuinely care about people's well-being.
+
+    USER CONTEXT:
+    {user_context}
+
+    AVAILABLE BOOKS (ONLY THESE CAN BE RECOMMENDED):
+    {books_context}
+
+    📚 COMPLETE LIST OF AVAILABLE BOOKS:
+    {titles_list}
+
+    📖 BOOK DETAILS:
+    {books_details}
+
+    IMPORTANT RULES:
+    1. Recommend ONLY books from the list above
+    2. RECOMMEND MULTIPLE books (2-3) that are most relevant to the user's interest
+    3. Use conversation history to maintain continuity
+    4. Be specific about WHY each book is relevant
+    5. Relate to previous conversation when applicable
+    6. If user asks about previously mentioned books, focus on them
+    7. Do not invent books that are not in the list
+    8. Do not suggest books that were not provided
+
+    YOUR RESPONSE SHOULD:
+    - Be natural and conversational
+    - Maintain conversation context
+    - Reference previous books if relevant
+    - Explain why each recommendation is good for the user
+    - Show empathy for the user's situation
+    - Be welcoming and understanding
+
+    EXAMPLES OF WHAT NOT TO DO:
+    - "I recommend book X" (if X is not in the list) ❌
+    - "There's a book called Y" (if Y is not in the list) ❌
+
+    EXAMPLES OF WHAT TO DO:
+    - "Based on the available books, I recommend: [list title]..." ✅
+    - "From the books we have, the most relevant is: [list title]..." ✅
+
+    IMPORTANT RULES:
+    - Do not assume technical interests (such as programming, data science, machine learning, or AI) unless the user explicitly mentions these topics in their message.
+    - If the user asks about a SPECIFIC book, check if it's in the TITLES LIST above and use the DETAILS to respond.
+    - NEVER invent books that aren't in the list.
+
+    User message: "{user_message}"
+    """
     
     # No response_generator.py, linha 235:
 
