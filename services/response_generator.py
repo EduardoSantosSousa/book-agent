@@ -367,11 +367,11 @@ IMPORTANT RULES:
                         if language == 'pt':
                             return f"""Aqui estão os detalhes de '{title}':
 
-**Título:** {title}
-**Autor(es):** {authors}
-**Avaliação:** {rating:.1f}/5.0
+**Title:** {title}
+**Author(s):** {authors}
+**Assessment:** {rating:.1f}/5.0
 
-**Descrição:**
+**Description:**
 {description}
 
 Gostaria de saber mais sobre algum outro livro?"""
